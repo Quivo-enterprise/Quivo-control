@@ -1,4 +1,5 @@
 import { devices, expect, test, type Page } from '@playwright/test';
+import { InfraccionHoySchema } from '../../packages/shared/src/entities/infraccion';
 import { PosicionEnVivoSchema } from '../../packages/shared/src/entities/en-vivo';
 import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
@@ -379,6 +380,85 @@ test.describe('Panel móvil (Pixel 7)', () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     } finally {
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+    }
+  });
+
+  test('Alertas: chips de gravedad con conteo y filtro, acciones en una fila y Ver en mapa con vehiculo/sesion', async () => {
+    test.setTimeout(90_000);
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const infra = (n: number, placa: string, gravedad: 'gravisima' | 'grave' | 'leve', estado: 'abierta' | 'atendida', haceMin: number) =>
+      InfraccionHoySchema.parse({
+        id: id(n), sindicatoId: id(100), vehiculoId: id(200 + n), conductorId: id(300), lineaId: id(400), rutaId: id(500), sesionId: id(600 + n),
+        reglaId: null, tipo: 'desvio_ruta', gravedad, estado, inicioTs: new Date(Date.now() - haceMin * 60_000).toISOString(), finTs: null,
+        lat: -17.38, lng: -66.3, detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 }, sancionId: null, atendidaPor: null, atendidaEn: null,
+        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: placa, conductorNombre: 'Bravo Soliz Javier', lineaNombre: 'Línea 16',
+      });
+    // Desordenadas a propósito: la lista debe salir gravísima, grave, leve (y la más reciente primero).
+    const filas = [
+      infra(1, '5163NCF', 'leve', 'abierta', 52),
+      infra(2, '1616PIL', 'grave', 'abierta', 30),
+      infra(3, '4701EHA', 'gravisima', 'abierta', 11),
+      infra(4, '2222AAA', 'leve', 'abierta', 5),
+      infra(5, '3333BBB', 'grave', 'atendida', 3),
+    ];
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: filas }));
+    await page.route('**/v1/sanciones*', (r) => r.fulfill({ json: [{ id: id(1) }, { id: id(2) }, { id: id(3) }] }));
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      const cards = page.locator('.qv-alertas__card');
+      await expect(cards).toHaveCount(4);
+      const chips = page.getByRole('group', { name: 'Filtrar por gravedad' }).getByRole('button');
+      await expect(chips).toHaveText(['1gravísima', '1grave', '2leve']); // solo abiertas: la grave atendida no cuenta
+      await expect(page.getByRole('link', { name: /Sanciones pendientes \(3\)/ })).toHaveAttribute('href', '/reglas');
+      // Orden: gravísima, grave, leve (más reciente primero dentro del nivel).
+      await expect(cards.locator('.qv-alertas-m__sev')).toHaveText(['gravísima', 'grave', 'leve', 'leve']);
+      await expect(cards.locator('.qv-plate__value')).toHaveText(['4701EHA', '1616PIL', '2222AAA', '5163NCF']);
+      await expect(cards.first().locator('.qv-alertas-m__hora')).toContainText('hace 11 min');
+      await expect(page.locator('.qv-alertas__titulo')).toHaveCount(4);
+      await expect(page.getByRole('heading', { level: 2 })).toHaveCount(0); // lista plana, sin encabezados por gravedad
+
+      // Acciones en una sola fila, dentro de la tarjeta y sin texto cortado.
+      for (const card of await cards.all()) {
+        const cajaCard = (await card.boundingBox())!;
+        const cajas = await Promise.all((await card.locator('.qv-alertas__acciones').locator('a, button').all()).map((b) => b.boundingBox()));
+        expect(cajas).toHaveLength(4); // Ver en mapa + Atender + Descartar + Sancionar
+        for (const c of cajas) {
+          expect(Math.abs(c!.y - cajas[0]!.y)).toBeLessThanOrEqual(1);
+          expect(c!.height).toBeGreaterThanOrEqual(48);
+          expect(c!.x + c!.width).toBeLessThanOrEqual(cajaCard.x + cajaCard.width + 0.5);
+        }
+        for (const b of await card.locator('.qv-alertas__acciones button').all()) {
+          expect(await b.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        }
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+      // Chip de gravedad: filtra con aria-pressed y volver a tocarlo lo quita.
+      await chips.nth(2).click();
+      await expect(chips.nth(2)).toHaveAttribute('aria-pressed', 'true');
+      await expect(cards).toHaveCount(2);
+      await expect(cards.locator('.qv-alertas-m__sev')).toHaveText(['leve', 'leve']);
+      await chips.nth(1).click();
+      await expect(chips.nth(2)).toHaveAttribute('aria-pressed', 'false');
+      await expect(cards).toHaveCount(1);
+      await chips.nth(1).click();
+      await expect(cards).toHaveCount(4);
+      // Con el estado Atendidas, el chip filtra dentro de las atendidas; los conteos de los chips siguen siendo de abiertas.
+      await page.getByRole('button', { name: /Atendidas/ }).click();
+      await chips.nth(0).click();
+      await expect(page.getByText('Sin alertas atendidas de gravedad gravísima')).toBeVisible();
+      await chips.nth(0).click();
+      await expect(cards).toHaveCount(1);
+      await page.getByRole('button', { name: /Abiertas/ }).click();
+
+      // Ver en mapa: icono sin texto, mismo destino con vehiculo y sesion.
+      const ver = cards.first().getByRole('link', { name: 'Ver en mapa 4701EHA' });
+      await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${id(203)}&sesion=${id(603)}`);
+      await ver.click();
+      await expect(page).toHaveURL(new RegExp(`/en-vivo\\?vehiculo=${id(203)}&sesion=${id(603)}`), { timeout: 30_000 });
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.unroute('**/v1/sanciones*');
     }
   });
 

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
 import { Ban, ChevronRight, MapPin } from 'lucide-react';
-import { LIMITE_INFRACCIONES_HOY, detalleInfraccion, etiquetaTipoInfraccion, type Infraccion, type InfraccionHoy, type Regla } from '@quivo/shared';
+import { LIMITE_INFRACCIONES_HOY, detalleInfraccion, etiquetaTipoInfraccion, type GravedadRegla, type Infraccion, type InfraccionHoy, type Regla } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
 import { infraccionesApi } from '../../../src/lib/api/infracciones';
 import { reglasApi } from '../../../src/lib/api/reglas';
@@ -14,6 +14,8 @@ import {
   ETIQUETA_NIVEL,
   NIVELES_DESC,
   aplicarResueltas,
+  cuentaAbiertasPorGravedad,
+  ordenarPorGravedad,
   type ResueltasInfraccion,
   duracionInfraccion,
   etiquetaInicioAlerta,
@@ -23,6 +25,9 @@ import {
   textoAlertasAbiertas,
 } from '../../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy } from '../../../src/lib/en-vivo/use-en-vivo';
+import { haceCorto } from '../../../src/lib/hoy/hoy.logic';
+import { LIMITE_SANCIONES_API, useSancionesPendientes } from '../../../src/lib/hoy/use-sanciones-pendientes';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import { mensajeError } from '../en-vivo/map-builders';
 import { FormularioDescarte, IconoNivel, mensajeAccion } from '../en-vivo/panel-vehiculo';
 import { ModalSancionar } from '../en-vivo/modal-sancionar';
@@ -46,7 +51,11 @@ export default function AlertasPage() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const alertas = useInfraccionesHoy(token);
+  const esMovil = useEsMovil();
+  const sanciones = useSancionesPendientes(token);
   const [filtro, setFiltro] = useState<Filtro>('abierta');
+  // Solo celular: chips de gravedad (volver a tocar el activo lo quita).
+  const [gravedad, setGravedad] = useState<GravedadRegla | null>(null);
   const [enCurso, setEnCurso] = useState<ReadonlyMap<string, Accion>>(new Map());
   const [resueltas, setResueltas] = useState<ResueltasInfraccion>(new Map());
   const [errores, setErrores] = useState<Readonly<Record<string, { placa: string; texto: string }>>>({});
@@ -61,9 +70,11 @@ export default function AlertasPage() {
     atendida: todas.filter((i) => i.estado === 'atendida').length,
     todas: todas.length,
   };
-  const visibles = filtro === 'todas' ? todas : todas.filter((i) => i.estado === filtro);
+  const porEstado = filtro === 'todas' ? todas : todas.filter((i) => i.estado === filtro);
+  const visibles = esMovil && gravedad ? porEstado.filter((i) => i.gravedad === gravedad) : porEstado;
   const grupos = NIVELES_DESC.map((nivel) => ({ nivel, items: visibles.filter((i) => i.gravedad === nivel) })).filter((g) => g.items.length > 0);
-  const orden = grupos.flatMap((g) => g.items);
+  const orden = esMovil ? ordenarPorGravedad(visibles) : grupos.flatMap((g) => g.items);
+  const cuentaGravedad = cuentaAbiertasPorGravedad(todas);
 
   // Foco: tras una acción lograda (ya aplicada en la lista local), si el foco cayó a <body> pasa a la primera acción
   // de la misma tarjeta (sigue listada, p. ej. filtro Todas) o de la que ocupa su lugar; sin tarjetas, al mensaje vacío.
@@ -143,12 +154,131 @@ export default function AlertasPage() {
       setSancion({ inf, reglas });
     }, false);
 
+  const tarjeta = (inf: InfraccionHoy) => {
+    const corriendo = enCurso.get(inf.id);
+    const pendiente = corriendo !== undefined;
+    const duracion = duracionInfraccion(inf);
+    return (
+      <li
+        key={inf.id}
+        data-alerta={inf.id}
+        className={`qv-live-inf qv-alertas__card qv-live-inf--${inf.gravedad}${inf.estado === 'abierta' ? '' : ' qv-live-inf--cerrada'}`}
+      >
+        {esMovil ? (
+          <div className="qv-alertas-m__cab">
+            <span className={`qv-alertas-m__sev qv-alertas-m__sev--${inf.gravedad}`}>
+              <IconoNivel nivel={inf.gravedad} size={18} />
+              {ETIQUETA_NIVEL[inf.gravedad].singular}
+            </span>
+            <span className="qv-alertas-m__hora">
+              {inf.estado === 'abierta' ? '' : `${ETIQUETA_ESTADO_INFRACCION[inf.estado]} · `}
+              {etiquetaInicioAlerta(inf.inicioTs)} · {haceCorto(Date.now() - inf.inicioTs.getTime())}
+            </span>
+          </div>
+        ) : (
+          <div className="qv-live-inf__cab">
+            <span className="qv-live-inf__icono">
+              <IconoNivel nivel={inf.gravedad} size={18} />
+            </span>
+            <span className="qv-live-inf__chip">{ETIQUETA_NIVEL[inf.gravedad].singular}</span>
+            <span className="qv-live-inf__estado">
+              {ETIQUETA_ESTADO_INFRACCION[inf.estado]} · {etiquetaInicioAlerta(inf.inicioTs)}
+            </span>
+          </div>
+        )}
+        <PlateBadge plate={inf.vehiculoPlaca} />
+        <h3 className="qv-alertas__titulo">{etiquetaTipoInfraccion(inf.tipo)}</h3>
+        <p className="qv-live-inf__detalle">
+          {detalleInfraccion(inf)}
+          {duracion ? ` · duró ${duracion}` : ''}
+          {' · '}
+          {inf.conductorNombre}
+          {esMovil ? '' : ` · ${inf.lineaNombre}`}
+        </p>
+        {descarte?.id === inf.id ? (
+          <FormularioDescarte
+            motivo={descarte.motivo}
+            pendiente={pendiente}
+            onMotivo={(motivo) => setDescarte({ id: inf.id, motivo })}
+            onCancelar={() => setDescarte(null)}
+            onEnviar={() => void actuar(inf, 'descartar', descarte.motivo.trim() || undefined)}
+          />
+        ) : (
+          <div className="qv-alertas__acciones">
+            <Link href={`/en-vivo?vehiculo=${inf.vehiculoId}&sesion=${inf.sesionId}`} prefetch={false} className={esMovil ? 'qv-live-btn qv-alertas-m__mapa' : 'qv-live-btn'} aria-label={`Ver en mapa ${inf.vehiculoPlaca}`}>
+              <MapPin size={esMovil ? 22 : 16} aria-hidden="true" />
+              {esMovil ? '' : 'Ver en mapa'}
+            </Link>
+            {puedeAtender(inf) && (
+              <button
+                type="button"
+                className="qv-live-btn"
+                disabled={pendiente}
+                aria-busy={corriendo === 'atender'}
+                aria-label={corriendo === 'atender' ? undefined : `Atender alerta ${inf.vehiculoPlaca}`}
+                onClick={() => void actuar(inf, 'atender')}
+              >
+                {corriendo === 'atender' ? 'Atendiendo…' : 'Atender'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="qv-live-btn"
+              disabled={pendiente}
+              aria-label={`Descartar alerta ${inf.vehiculoPlaca}`}
+              onClick={() => setDescarte({ id: inf.id, motivo: '' })}
+            >
+              Descartar
+            </button>
+            {puedeSancionar(inf) && (
+              <button
+                type="button"
+                className="qv-live-btn qv-live-btn--primario"
+                disabled={pendiente}
+                aria-busy={corriendo === 'sancionar'}
+                aria-label={corriendo === 'sancionar' ? undefined : `Sancionar alerta ${inf.vehiculoPlaca}`}
+                onClick={() => void abrirSancion(inf)}
+              >
+                {corriendo === 'sancionar' ? 'Cargando…' : 'Sancionar'}
+              </button>
+            )}
+          </div>
+        )}
+        {errores[inf.id] && (
+          <p className="qv-live-panel__error" role="alert">
+            {errores[inf.id]?.texto}
+          </p>
+        )}
+      </li>
+    );
+  };
+
   return (
-    <div className="qv-alertas">
+    <div className={esMovil ? 'qv-alertas qv-alertas-m' : 'qv-alertas'}>
       <p className="qv-visually-hidden" aria-live="polite">
         {alertas.data ? textoAlertasAbiertas(cuenta.abierta) : ''}
       </p>
       <PageHeader title="Alertas" subtitle={alertas.data ? `Hoy · ${textoAlertasAbiertas(cuenta.abierta)}` : 'Hoy'} />
+
+      {esMovil && (
+        <div className="qv-alertas-m__gravedades" role="group" aria-label="Filtrar por gravedad">
+          {NIVELES_DESC.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={`qv-alertas-m__gchip qv-alertas-m__gchip--${n}`}
+              aria-pressed={gravedad === n}
+              onClick={() => {
+                setGravedad(gravedad === n ? null : n);
+                setErrores({});
+              }}
+            >
+              <b>{cuentaGravedad[n]}</b>
+              {ETIQUETA_NIVEL[n].singular}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="qv-alertas__chips" role="group" aria-label="Filtrar por estado">
         {FILTROS.map((f) => (
@@ -171,6 +301,7 @@ export default function AlertasPage() {
         <span>
           <Ban size={20} aria-hidden="true" />
           Sanciones pendientes
+          {esMovil && sanciones.data ? ` (${sanciones.data.length >= LIMITE_SANCIONES_API ? `${LIMITE_SANCIONES_API}+` : sanciones.data.length})` : ''}
         </span>
         <ChevronRight size={20} aria-hidden="true" />
       </Link>
@@ -200,8 +331,12 @@ export default function AlertasPage() {
         </Alert>
       ) : visibles.length === 0 ? (
         <p className="qv-alertas__vacio" tabIndex={-1}>
-          {VACIO[filtro]}
+          {esMovil && gravedad ? `${VACIO[filtro]} de gravedad ${ETIQUETA_NIVEL[gravedad].singular}` : VACIO[filtro]}
         </p>
+      ) : esMovil ? (
+        <ul className="qv-live-infracciones" aria-label="Alertas">
+          {orden.map(tarjeta)}
+        </ul>
       ) : (
         grupos.map(({ nivel, items: grupo }) => {
           return (
@@ -210,90 +345,7 @@ export default function AlertasPage() {
                 {ETIQUETA_NIVEL[nivel].plural} <span>{grupo.length}</span>
               </h2>
               <ul className="qv-live-infracciones">
-                {grupo.map((inf) => {
-                  const corriendo = enCurso.get(inf.id);
-                  const pendiente = corriendo !== undefined;
-                  const duracion = duracionInfraccion(inf);
-                  return (
-                    <li
-                      key={inf.id}
-                      data-alerta={inf.id}
-                      className={`qv-live-inf qv-alertas__card qv-live-inf--${inf.gravedad}${inf.estado === 'abierta' ? '' : ' qv-live-inf--cerrada'}`}
-                    >
-                      <div className="qv-live-inf__cab">
-                        <span className="qv-live-inf__icono">
-                          <IconoNivel nivel={inf.gravedad} size={18} />
-                        </span>
-                        <span className="qv-live-inf__chip">{ETIQUETA_NIVEL[inf.gravedad].singular}</span>
-                        <span className="qv-live-inf__estado">
-                          {ETIQUETA_ESTADO_INFRACCION[inf.estado]} · {etiquetaInicioAlerta(inf.inicioTs)}
-                        </span>
-                      </div>
-                      <PlateBadge plate={inf.vehiculoPlaca} />
-                      <h3 className="qv-alertas__titulo">{etiquetaTipoInfraccion(inf.tipo)}</h3>
-                      <p className="qv-live-inf__detalle">
-                        {detalleInfraccion(inf)}
-                        {duracion ? ` · duró ${duracion}` : ''}
-                        {' · '}
-                        {inf.conductorNombre} · {inf.lineaNombre}
-                      </p>
-                      {descarte?.id === inf.id ? (
-                        <FormularioDescarte
-                          motivo={descarte.motivo}
-                          pendiente={pendiente}
-                          onMotivo={(motivo) => setDescarte({ id: inf.id, motivo })}
-                          onCancelar={() => setDescarte(null)}
-                          onEnviar={() => void actuar(inf, 'descartar', descarte.motivo.trim() || undefined)}
-                        />
-                      ) : (
-                        <div className="qv-alertas__acciones">
-                          <Link href={`/en-vivo?vehiculo=${inf.vehiculoId}&sesion=${inf.sesionId}`} prefetch={false} className="qv-live-btn" aria-label={`Ver en mapa ${inf.vehiculoPlaca}`}>
-                            <MapPin size={16} aria-hidden="true" />
-                            Ver en mapa
-                          </Link>
-                          {puedeAtender(inf) && (
-                            <button
-                              type="button"
-                              className="qv-live-btn"
-                              disabled={pendiente}
-                              aria-busy={corriendo === 'atender'}
-                              aria-label={corriendo === 'atender' ? undefined : `Atender alerta ${inf.vehiculoPlaca}`}
-                              onClick={() => void actuar(inf, 'atender')}
-                            >
-                              {corriendo === 'atender' ? 'Atendiendo…' : 'Atender'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="qv-live-btn"
-                            disabled={pendiente}
-                            aria-label={`Descartar alerta ${inf.vehiculoPlaca}`}
-                            onClick={() => setDescarte({ id: inf.id, motivo: '' })}
-                          >
-                            Descartar
-                          </button>
-                          {puedeSancionar(inf) && (
-                            <button
-                              type="button"
-                              className="qv-live-btn qv-live-btn--primario"
-                              disabled={pendiente}
-                              aria-busy={corriendo === 'sancionar'}
-                              aria-label={corriendo === 'sancionar' ? undefined : `Sancionar alerta ${inf.vehiculoPlaca}`}
-                              onClick={() => void abrirSancion(inf)}
-                            >
-                              {corriendo === 'sancionar' ? 'Cargando…' : 'Sancionar'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {errores[inf.id] && (
-                        <p className="qv-live-panel__error" role="alert">
-                          {errores[inf.id]?.texto}
-                        </p>
-                      )}
-                    </li>
-                  );
-                })}
+                {grupo.map(tarjeta)}
               </ul>
             </section>
           );
