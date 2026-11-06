@@ -13,7 +13,8 @@ import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
 import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
-import { BUSQUEDA_MIN, buscarHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
+import { useSaludRefresco } from '../../src/lib/en-vivo/use-salud-refresco';
+import { BUSQUEDA_MIN, buscarHoy, fechaHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
 
 interface Kpi {
@@ -52,6 +53,27 @@ function TarjetaKpi({ kpi }: { kpi: Kpi }) {
   );
 }
 
+const INTERVALO_HOY_MS = 15_000;
+
+const PILDORA: Record<'ok' | 'lento' | 'sin_conexion', { texto: string; clase: string }> = {
+  ok: { texto: 'En vivo', clase: '' },
+  lento: { texto: 'Lento', clase: ' qv-live-pill--lento' },
+  sin_conexion: { texto: 'Sin conexión', clase: ' qv-live-pill--off' },
+};
+
+/** Hoja: el tick de 1 Hz de `useSaludRefresco` re-renderiza solo la píldora. Sin primer dato no muestra nada. */
+function PildoraEnVivo({ consulta }: { consulta: { dataUpdatedAt: number; isError: boolean } }) {
+  const salud = useSaludRefresco(consulta, INTERVALO_HOY_MS);
+  if (!consulta.dataUpdatedAt && !consulta.isError) return null;
+  const { texto, clase } = PILDORA[salud.estado];
+  return (
+    <span className={`qv-live-pill${clase}`} role="status">
+      <span className="qv-live-pill__dot" aria-hidden="true" />
+      {texto}
+    </span>
+  );
+}
+
 export function HoyMovil() {
   const { token } = useAuth();
   const [consulta, setConsulta] = useState('');
@@ -59,7 +81,7 @@ export function HoyMovil() {
   const n = normalizarBusqueda(consulta).length;
   const buscando = n >= BUSQUEDA_MIN;
   // Home: refresco lento (15 s); las jornadas solo hacen falta para cruzar el conductor al buscar.
-  const posiciones = usePosicionesEnVivo(token, 15_000);
+  const posiciones = usePosicionesEnVivo(token, INTERVALO_HOY_MS);
   const jornadas = useJornadasHoy(token, buscando);
   const alertas = useInfraccionesHoy(token);
   // Todas las pendientes (sin filtro de fecha). La API devuelve como máximo 200 filas y sin total.
@@ -149,7 +171,8 @@ export function HoyMovil() {
 
   return (
     <div className="qv-hoy">
-      <PageHeader title="Hoy" subtitle="Resumen del día y consultas rápidas" />
+      {/* El nombre del sindicato no viaja en `useAuth().user` (solo `sindicatoId`): el subtítulo lleva solo la fecha. */}
+      <PageHeader title="Hoy" subtitle={fechaHoy()} actions={<PildoraEnVivo consulta={posiciones} />} />
 
       <p className="qv-visually-hidden" aria-live="polite">
         {abiertas ? textoAlertasAbiertas(abiertas.length) : ''}

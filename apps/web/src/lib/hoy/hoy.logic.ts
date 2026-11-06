@@ -63,3 +63,13 @@ export function buscarHoy(
     total: deVehiculos.length + deConductores.length,
   };
 }
+
+/** "Mié 5 nov" en hora de La Paz (el servidor y el celular pueden estar en otra zona). */
+export function fechaHoy(ahora: Date = new Date()): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('es-BO', { timeZone: 'America/La_Paz', weekday: 'short', day: 'numeric', month: 'short' })
+      .formatToParts(ahora)
+      .map((x) => [x.type, x.value.replaceAll('.', '')]),
+  );
+  return `${p.weekday!.charAt(0).toUpperCase()}${p.weekday!.slice(1)} ${p.day} ${p.month}`;
+}

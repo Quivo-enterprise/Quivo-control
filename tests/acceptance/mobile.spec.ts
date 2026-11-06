@@ -112,6 +112,47 @@ test.describe('Panel móvil (Pixel 7)', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   });
 
+  test('encabezado único por ruta, tabbar de 76 px y contador de alertas', async () => {
+    test.setTimeout(300_000);
+    const base = {
+      sindicatoId: '00000000-0000-4000-8000-0000000000a1', vehiculoId: '00000000-0000-4000-8000-0000000000b1',
+      conductorId: '00000000-0000-4000-8000-0000000000c1', lineaId: '00000000-0000-4000-8000-0000000000d1',
+      rutaId: '00000000-0000-4000-8000-0000000000e1', reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
+      sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
+      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', sesionId: '00000000-0000-4000-8000-0000000000f1',
+      tipo: 'pc_omitido', gravedad: 'leve', inicioTs: new Date().toISOString(), detalle: {},
+    };
+    const abiertas = [1, 2, 3].map((n) => ({ ...base, id: `00000000-0000-4000-8000-00000000000${n}`, estado: 'abierta' }));
+    const infracciones = '**/v1/reportes/en-vivo/infracciones*';
+    const titulos = page.locator('.qv-page-header__title, .qv-admin-layout__topbar-title').filter({ visible: true });
+    const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
+    const enlaceAlertas = tabbar.getByRole('link', { name: /Alertas/ });
+    try {
+      // Con alertas abiertas: contador visible y con texto para lectores de pantalla.
+      await page.route(infracciones, (r) => r.fulfill({ json: abiertas }));
+      for (const route of ROUTES) {
+        await page.goto(route, { waitUntil: 'networkidle', timeout: 60_000 });
+        await expect(page.getByRole('main')).toBeVisible();
+        await expect(titulos, `${route}: un solo título visible`).toHaveCount(1);
+        expect((await tabbar.boundingBox())!.height, route).toBe(76);
+      }
+      await expect(enlaceAlertas.locator('.qv-tabbar__badge')).toHaveText('3');
+      await expect(enlaceAlertas).toContainText('3 alertas abiertas');
+      const badge = (await enlaceAlertas.locator('.qv-tabbar__badge').boundingBox())!;
+      expect(badge.width).toBeGreaterThanOrEqual(20);
+      expect(badge.height).toBe(20);
+
+      // Sin alertas abiertas: no hay contador.
+      await page.unroute(infracciones);
+      await page.route(infracciones, (r) => r.fulfill({ json: [] }));
+      await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
+      await expect(enlaceAlertas).toBeVisible();
+      await expect(tabbar.locator('.qv-tabbar__badge')).toHaveCount(0);
+    } finally {
+      await page.unroute(infracciones);
+    }
+  });
+
   test('Salidas: stepper de base, confirmación y Despachar a todo el ancho', async () => {
     test.setTimeout(90_000);
     // API mockeada (formas validadas contra @quivo/shared): una terminal, base 8 min, fila de 2 trufis.
@@ -653,6 +694,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(kpi('Alertas abiertas')).toHaveAttribute('href', '/alertas');
       await expect(kpi('Sanciones pendientes')).toContainText('4');
       await expect(kpi('Sanciones pendientes')).toHaveAttribute('href', '/reglas');
+      await expect(page.locator('.qv-live-pill')).toContainText('En vivo');
+      await expect(page.getByRole('navigation', { name: 'Pestañas', exact: true }).locator('.qv-tabbar__badge')).toHaveText('3');
 
       await page.getByLabel('Buscar placa o conductor').fill('4701 eh');
       const resultado = page.locator('.qv-hoy__resultado');

@@ -5030,27 +5030,75 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   .qv-admin-layout__main {
-    gap: var(--qv-space-sm);
+    gap: 0;
   }
 
+  /* Comp .body: 16 px a los lados y 14 px bajo el encabezado. */
   .qv-admin-layout__content {
-    padding: 0 var(--qv-space-sm) var(--qv-space-md);
+    padding: 14px 16px var(--qv-space-md);
   }
 
-  /* Topbar sticky */
+  /* Encabezado único (comp .hd): sólido, sticky. Las páginas sin PageHeader lo hacen con la topbar; con PageHeader, éste lo reemplaza. */
   .qv-admin-layout__topbar {
     position: sticky;
     top: 0;
     z-index: 30;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
-    gap: var(--qv-space-xs);
-    min-height: calc(3.5rem + env(safe-area-inset-top));
-    padding: env(safe-area-inset-top) calc(var(--qv-space-sm) + env(safe-area-inset-right)) 0 calc(var(--qv-space-xs) + env(safe-area-inset-left));
-    background: var(--qv-surface-glass);
-    backdrop-filter: blur(24px) saturate(190%);
-    -webkit-backdrop-filter: blur(24px) saturate(190%);
-    border-bottom: 1px solid var(--qv-border-glass);
+    gap: 10px;
+    min-height: calc(62px + env(safe-area-inset-top));
+    padding: calc(6px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 12px calc(16px + env(safe-area-inset-left));
+    background: var(--qv-surface-card);
+    border-bottom: 1px solid var(--qv-border-subtle);
+  }
+
+  .qv-admin-layout--tabs:has(.qv-page-header) .qv-admin-layout__topbar {
+    display: none;
+  }
+
+  .qv-admin-layout--tabs:has(.qv-page-header) .qv-admin-layout__content {
+    padding-top: 0;
+  }
+
+  .qv-page-header {
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0 -16px 14px;
+    min-height: calc(62px + env(safe-area-inset-top));
+    padding: calc(6px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 12px calc(16px + env(safe-area-inset-left));
+    background: var(--qv-surface-card);
+    border-bottom: 1px solid var(--qv-border-subtle);
+  }
+
+  .qv-admin-layout--tabs .qv-page-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+
+  .qv-page-header__copy {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 0;
+  }
+
+  .qv-page-header__title {
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.15;
+  }
+
+  .qv-page-header__subtitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--qv-text-secondary);
+  }
+
+  .qv-page-header__actions {
+    flex: none;
   }
 
   .qv-admin-layout__menu-btn,
@@ -5095,8 +5143,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--qv-font-display);
-    font-size: 1.0625rem;
-    font-weight: 700;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.15;
     color: var(--qv-text-primary);
   }
 
@@ -5468,9 +5517,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 @media (max-width: 720px) {
   html:has(.qv-admin-layout--tabs) {
-    --qv-tabbar-h: calc(64px + env(safe-area-inset-bottom));
-    /* La topbar sticky (altura mínima de abajo) y la tabbar no deben tapar el elemento enfocado. */
-    scroll-padding-top: calc(3.5rem + env(safe-area-inset-top));
+    --qv-tabbar-h: calc(76px + env(safe-area-inset-bottom));
+    /* El encabezado sticky (altura mínima de arriba) y la tabbar no deben tapar el elemento enfocado. */
+    scroll-padding-top: calc(62px + env(safe-area-inset-top));
     scroll-padding-bottom: var(--qv-tabbar-h);
   }
 
@@ -5481,12 +5530,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     z-index: 900; /* bajo el drawer (950/960) y los modales (1000) */
     box-sizing: border-box;
     height: var(--qv-tabbar-h);
-    padding: 4px calc(4px + env(safe-area-inset-right)) env(safe-area-inset-bottom) calc(4px + env(safe-area-inset-left));
+    padding: 6px calc(4px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
     background: var(--qv-surface-card);
     border-top: 1px solid var(--qv-border-subtle);
   }
 
   .qv-tabbar__tab {
+    position: relative;
     flex: 1 1 0;
     min-width: 0;
     min-height: 56px;
@@ -5526,10 +5576,90 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     background: var(--qv-color-primary-soft);
   }
 
+  /* Anillo primario de 3 px (el naranja da ~2:1 sobre blanco); el offset lo deja sobre la tarjeta, fuera de la píldora activa. */
   .qv-tabbar__tab:focus-visible {
-    outline: none;
-    box-shadow: var(--qv-shadow-focus);
+    outline: 3px solid var(--qv-color-primary);
+    outline-offset: 2px;
+    box-shadow: none;
     border-radius: var(--qv-radius-md);
+  }
+
+  /* Contador de alertas (comp .bdg). */
+  .qv-tabbar__badge {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    margin-left: 8px;
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border: 2px solid var(--qv-surface-card);
+    border-radius: 10px;
+    background: var(--qv-color-danger);
+    color: #fff;
+    font: 800 12px var(--qv-font-display);
+  }
+
+  /* Píldora "En vivo" del encabezado de Hoy (comp .live). */
+  .qv-live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 99px;
+    background: var(--qv-color-success-soft);
+    color: var(--qv-estado-reportando-texto);
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .qv-live-pill__dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--qv-color-success);
+    animation: qv-live-pulse 2s infinite;
+  }
+
+  .qv-live-pill--lento {
+    background: var(--qv-color-warning-soft);
+    color: #92400e;
+  }
+
+  .qv-live-pill--lento .qv-live-pill__dot {
+    background: var(--qv-color-warning);
+  }
+
+  .qv-live-pill--off {
+    background: var(--qv-surface-soft);
+    color: var(--qv-text-secondary);
+  }
+
+  .qv-live-pill--off .qv-live-pill__dot {
+    background: var(--qv-text-secondary);
+    animation: none;
+  }
+
+  @keyframes qv-live-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .qv-live-pill__dot {
+      animation: none;
+    }
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .qv-live-pill--lento {
+      color: #fcd34d;
+    }
   }
 
   .qv-admin-layout--tabs .qv-admin-layout__content {
