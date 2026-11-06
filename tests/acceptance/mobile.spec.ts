@@ -6,7 +6,6 @@ import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
 const ADMIN = { email: 'admin@quivo.local', password: 'Quivo123!' };
 
-// /en-vivo y /rutas se cubren en PR B/C. El admin_quivo ve todo lo demás.
 // Ítems de la página Más por rol (orden de NAV_ITEMS, sin las pestañas ni Dashboard).
 const ETIQUETAS_MAS = {
   admin_quivo: ['Sindicatos', 'Socios', 'Vehículos', 'Conductores', 'Líneas', 'Rutas', 'Rotaciones', 'Reglas y sanciones', 'Reportes', 'Auditoría', 'Errores de sync', 'Usuarios'],
@@ -16,6 +15,7 @@ const ETIQUETAS_MAS = {
 // El texto de cada fila incluye el tag "Solo lectura" de Rutas.
 const conTag = (etiquetas: string[]) => etiquetas.map((e) => new RegExp(`^${e}(Solo lectura)?$`));
 
+// /en-vivo y /rutas se cubren en PR B/C. El admin_quivo ve todo lo demás.
 const ROUTES = NAV_ITEMS.filter(
   (i) => i.roles.includes('admin_quivo') && !['/en-vivo', '/rutas'].includes(i.href),
 ).map((i) => i.href);
@@ -1451,6 +1451,24 @@ test.describe('Más por rol (sesión simulada)', () => {
     await expect(p).toHaveURL(/\/$/, { timeout: 30_000 });
     await expect(p.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeVisible();
     await expect(p.getByRole('navigation', { name: 'Pestañas', exact: true })).toBeHidden();
+    await context.close();
+  });
+
+  test('escritorio: /mas del operador redirige directo a /en-vivo', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'operador', { width: 1440, height: 900 });
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p).toHaveURL(/\/en-vivo\/?$/, { timeout: 30_000 });
+    await context.close();
+  });
+
+  test('girar el celular (915x412) no saca al usuario de /mas', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p.locator('.qv-mas-list')).toBeVisible({ timeout: 30_000 });
+    await p.setViewportSize({ width: 915, height: 412 });
+    await p.waitForTimeout(1000);
+    await expect(p).toHaveURL(/\/mas\/?$/);
+    await expect(p.locator('.qv-mas-list')).toBeVisible();
     await context.close();
   });
 

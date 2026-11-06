@@ -6954,6 +6954,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   -webkit-tap-highlight-color: transparent;
 }
 
+.qv-mas-list__link:active {
+  background: var(--qv-surface-soft);
+}
+
 .qv-mas-list__link:focus-visible {
   outline: 3px solid var(--qv-color-primary);
   outline-offset: -3px;

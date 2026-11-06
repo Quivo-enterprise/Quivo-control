@@ -145,8 +145,9 @@ describe('itemsParaMas (página Más del celular)', () => {
   });
 
   it('/mas no es el aterrizaje de ningún rol', () => {
-    expect(rutaInicialParaRol(NAV_ITEMS, 'operador')).toBe('/en-vivo');
-    expect(isRouteAllowedForRole(NAV_ITEMS, '/mas', 'operador')).toBe(true);
+    for (const rol of ['admin_quivo', 'admin_sindicato', 'operador']) {
+      expect(rutaInicialParaRol(NAV_ITEMS, rol)).not.toBe('/mas');
+    }
   });
 });
 
