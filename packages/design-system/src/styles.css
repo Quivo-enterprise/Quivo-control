@@ -16,6 +16,12 @@
   -ms-overflow-style: none !important;
 }
 
+/* El canvas (bajo la tabbar con viewport-fit: cover) sigue el tema; sin esto queda blanco en oscuro. */
+html {
+  color-scheme: light dark;
+  background: var(--qv-surface-sunken);
+}
+
 *::-webkit-scrollbar,
 html::-webkit-scrollbar,
 body::-webkit-scrollbar {
@@ -2502,6 +2508,13 @@ body::-webkit-scrollbar {
 [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada) .qv-gmap-label--marker,
 [data-lbl-route='1'] .qv-gmap-label--route {
   display: block;
+}
+
+/* En el teléfono el mapa va limpio: los puntos de control (ida y vuelta en el mismo sitio) no llevan rótulo. */
+@media (max-width: 720px) {
+  [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada) .qv-gmap-label--marker {
+    display: none;
+  }
 }
 
 .qv-gmap--clickable {
