@@ -1,6 +1,13 @@
 @import 'tailwindcss';
 @import '@quivo/design-system/styles.css';
 
+/* Tailwind preflight va en @layer y se pierde en Chrome < 99: border-box sin capa no depende de él. */
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
 /*
  * El design system expone --qv-font-display/--qv-font-body como variables (sin @font-face
  * propio) — acá se conectan a las fuentes reales cargadas con next/font/google en
@@ -1845,6 +1852,7 @@ body {
   padding: 1.15rem;
   /* Alto automático por contenido; máximo = pantalla menos los márgenes del layout */
   height: auto;
+  max-height: calc(100vh - var(--qv-space-sm) - var(--qv-space-sm));
   max-height: calc(100dvh - var(--qv-space-sm) - var(--qv-space-sm));
   overflow-y: auto;
   z-index: 20;
@@ -3836,6 +3844,8 @@ body {
 /* Móvil (≤720px): /rutas solo lectura, alto = pantalla menos topbar, HUD bajo el drawer de navegación. */
 @media (max-width: 720px) {
   .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__content {
+    height: calc(100vh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
+    max-height: calc(100vh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
     height: calc(100dvh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
     max-height: calc(100dvh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
   }

@@ -5371,7 +5371,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 
 @media (max-width: 720px) {
-  .qv-admin-layout,
+  .qv-admin-layout {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+    gap: 0;
+  }
+
+  /* Aparte: un :has() sin soporte (Chrome < 105) anularía toda la lista. */
   .qv-admin-layout:has(.qv-route-builder-wrapper) {
     grid-template-columns: minmax(0, 1fr);
     padding: 0;
@@ -5467,7 +5473,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   /* La navegación son las pestañas inferiores: la sidebar solo existe en escritorio. */
-  .qv-admin-layout .qv-admin-layout__sidebar,
+  .qv-admin-layout .qv-admin-layout__sidebar {
+    display: none;
+  }
+
   .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
     display: none;
   }
@@ -5788,6 +5797,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     min-width: 220px;
     max-width: calc(100vw - 24px);
     /* Todo el alto libre: viewport - inset superior - top de la fila (12px) - top del menú (56px) - tabbar - margen 8px. */
+    max-height: calc(100vh - env(safe-area-inset-top) - 76px - var(--qv-tabbar-h, 0px));
     max-height: calc(100dvh - env(safe-area-inset-top) - 76px - var(--qv-tabbar-h, 0px));
     overflow-y: auto;
     padding: 4px;
@@ -5925,6 +5935,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 }
 
 @media (max-width: 720px) {
+  /* Sin :has() para que la variable exista en Chrome < 105; la tabbar y todo lo que la usa viven dentro del layout. */
+  .qv-admin-layout--tabs {
+    --qv-tabbar-h: calc(76px + env(safe-area-inset-bottom));
+  }
+
   html:has(.qv-admin-layout--tabs) {
     --qv-tabbar-h: calc(76px + env(safe-area-inset-bottom));
     /* El encabezado sticky (altura mínima de arriba) y la tabbar no deben tapar el elemento enfocado. */
@@ -6085,6 +6100,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
   /* En vivo: el mapa, la barra y la hoja del vehículo terminan sobre la tabbar. */
   .qv-admin-layout--tabs .qv-live-standalone-shell {
+    height: calc(100vh - var(--qv-tabbar-h));
     height: calc(100dvh - var(--qv-tabbar-h));
     padding-bottom: 0;
   }
