@@ -9,7 +9,7 @@ import { BaseRapida } from './base-rapida';
 import { FilaEnVivo } from './fila-en-vivo';
 import { FrecuenciasPanel } from './frecuencias-panel';
 import { GruposPanel } from './grupos-panel';
-import { mensajeError, useGruposVehiculo, useTerminales, useVehiculosSalida } from './use-salidas';
+import { mensajeError, useFilaSalida, useGruposVehiculo, useTerminales, useVehiculosSalida } from './use-salidas';
 
 const ROLES_GRUPOS = ['admin_quivo', 'admin_sindicato'];
 
@@ -41,6 +41,17 @@ function SalidasContenido() {
   const elegida = opciones.some((o) => o.value === param) ? param : opciones.length === 1 ? opciones[0]!.value : '';
   const elegir = (id: string) => router.replace(`${pathname}?terminal=${encodeURIComponent(id)}`);
 
+  // Celular: el encabezado nombra la terminal y cuenta la fila (misma query que `FilaEnVivo`: cache compartida).
+  // `etiqueta` ya trae la línea ("16 · ida · punto 1"), por eso el subtítulo no la repite.
+  const terminal = esMovil && elegida ? opciones.find((o) => o.value === elegida) : undefined;
+  const enFila = useFilaSalida(terminal ? token : null, elegida || null).data?.items.length;
+  const titulo = terminal?.label ?? 'Salidas';
+  const subtitulo = terminal
+    ? enFila === undefined
+      ? undefined
+      : `${enFila} en fila`
+    : 'Fila de salida y frecuencias de la terminal.';
+
   const lista = useMemo(() => vehiculos.data ?? [], [vehiculos.data]);
   // Nombres de TODOS los vehículos (la fila puede traer uno ya inactivo); los selectores solo ofrecen activos.
   const activos = useMemo(() => lista.filter((v) => v.estado === 'activo'), [lista]);
@@ -52,8 +63,8 @@ function SalidasContenido() {
   const listaGrupos = useMemo(() => grupos.data ?? [], [grupos.data]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      <PageHeader title="Salidas" subtitle="Fila de salida y frecuencias de la terminal." />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: esMovil ? '0.75rem' : '1.25rem' }}>
+      <PageHeader title={titulo} subtitle={subtitulo} />
       {terminales.isPending && <Loader label="Cargando terminales…" />}
       {terminales.isError && <Alert variant="danger" title="No se pudieron cargar las terminales">{mensajeError(terminales.error)}</Alert>}
       {terminales.data && terminales.data.fallidas > 0 && (

@@ -2,6 +2,7 @@ import { CrearFrecuenciaReglaSchema } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ajustarBase,
+  conductorPorVehiculo,
   estadoVisualFila,
   formatearCuenta,
   horaAMinutos,
@@ -144,5 +145,19 @@ describe('validarBase', () => {
     expect(r.ok === false && r.mensaje).toMatch(/^Ingresá un número entero de \d+ a \d+ minutos\.$/);
     const d = validarBase(0, true);
     expect(d.ok === false && d.mensaje).toMatch(/minutos, o dejalo vacío\.$/);
+  });
+});
+
+describe('conductorPorVehiculo', () => {
+  it('mapea vehículo a conductor, omite sin conductor y conserva el primero si se repite', () => {
+    expect(
+      conductorPorVehiculo([
+        { vehiculoId: 'a', conductorNombre: 'Bravo Soliz Javier' },
+        { vehiculoId: 'b', conductorNombre: null },
+        { vehiculoId: 'c', conductorNombre: '' },
+        { vehiculoId: 'a', conductorNombre: 'Otro' },
+      ]),
+    ).toEqual({ a: 'Bravo Soliz Javier' });
+    expect(conductorPorVehiculo([])).toEqual({});
   });
 });

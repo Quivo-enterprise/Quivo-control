@@ -5,16 +5,17 @@ import { Alert, Button, Card, ConfirmDialog, DataTable, PlateBadge, StatusBadge,
 import type { FilaSalidaPanelItem, SalidaRecientePanel } from '@quivo/shared';
 import { Clock3, History } from 'lucide-react';
 import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
-import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
+import { useJornadasHoy } from '../../../src/lib/en-vivo/use-en-vivo';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import {
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
+  conductorPorVehiculo,
   estadoVisualFila,
-  formatearCuenta,
   offsetServidorMs,
-  restanteMs,
   type EstadoVisualFila,
 } from '../../../src/lib/salidas/salidas.logic';
+import { CuentaFila, FilaMovil, type TipoAccion } from './fila-movil';
 import { mensajeError, useAccionesFila, useFilaSalida } from './use-salidas';
 
 const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
@@ -26,7 +27,6 @@ const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
 const MUTED = { color: 'var(--qv-text-secondary)', fontSize: 'var(--qv-text-sm)' } as const;
 const NUM = { fontVariantNumeric: 'tabular-nums' } as const;
 
-type TipoAccion = 'despachar' | 'moverAlFinal' | 'retirar';
 type Accion = { tipo: TipoAccion; item: FilaSalidaPanelItem };
 
 const TEXTO_PROGRESO: Record<TipoAccion, string> = {
@@ -55,20 +55,6 @@ const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: 
 
 const hhmm = (ms: number) => formatearHoraBolivia(new Date(ms).toISOString());
 
-/**
- * Cuenta hasta la salida. El tick de 1 Hz vive en esta hoja (como `SaludRefrescoVista`): repinta
- * solo el texto, no la tabla. La hora de referencia es la del servidor (`offsetMs`).
- */
-function CuentaFila({ etaTs, offsetMs }: { etaTs: string; offsetMs: number }) {
-  const ahora = useReloj(1_000);
-  const restante = restanteMs(etaTs, offsetMs, ahora);
-  return (
-    <span style={{ ...NUM, fontWeight: 700, color: restante < 0 ? 'var(--qv-color-warning)' : undefined }}>
-      {formatearCuenta(restante)}
-    </span>
-  );
-}
-
 export function FilaEnVivo({
   token,
   pcId,
@@ -83,6 +69,10 @@ export function FilaEnVivo({
   const [pendiente, setPendiente] = useState<Accion | null>(null);
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [enCurso, setEnCurso] = useState<{ tipo: TipoAccion; id: string } | null>(null);
+  const esMovil = useEsMovil();
+  // Conductor de cada trufi: jornadas de hoy (misma query que Hoy/En vivo); solo se pide en el celular.
+  const jornadas = useJornadasHoy(token, esMovil);
+  const conductores = useMemo(() => conductorPorVehiculo(jornadas.data?.vehiculos ?? []), [jornadas.data]);
 
   const data = fila.data;
   // `dataUpdatedAt` = cuándo llegó esta respuesta al navegador; con `servidorTs` da el desfase de reloj.
@@ -103,6 +93,12 @@ export function FilaEnVivo({
     }
   };
 
+  // Despachar a un trufi aún no habilitado pide confirmación (salida anticipada); el resto va directo al diálogo.
+  const pedir = (tipo: TipoAccion, item: FilaSalidaPanelItem) => {
+    if (tipo === 'despachar' && item.habilitado) void ejecutar('despachar', item);
+    else setPendiente({ tipo, item });
+  };
+
   const confirmar = () => {
     if (!pendiente) return;
     const { tipo, item } = pendiente;
@@ -115,6 +111,50 @@ export function FilaEnVivo({
   const sinConexionConDatos = fila.isError && Boolean(data);
   const progreso = (tipo: TipoAccion, id: string) => enCurso?.tipo === tipo && enCurso.id === id;
   const items = data?.items ?? [];
+
+  const dialogo = (
+    <ConfirmDialog
+      open={pendiente !== null}
+      variant={pendiente?.tipo === 'retirar' ? 'danger' : 'primary'}
+      title={DIALOGO[pendiente?.tipo ?? 'despachar'].titulo}
+      message={pendiente ? DIALOGO[pendiente.tipo].mensaje(pendiente.item.placa) : undefined}
+      confirmLabel={DIALOGO[pendiente?.tipo ?? 'despachar'].confirmar}
+      onConfirm={confirmar}
+      onCancel={() => setPendiente(null)}
+    />
+  );
+
+  if (esMovil) {
+    return (
+      <>
+        {sinConexionConDatos && (
+          <Alert variant="warning" title="Sin conexión">
+            Datos de las {hhmm(fila.dataUpdatedAt)}, pueden estar desactualizados. Se reintenta solo.
+          </Alert>
+        )}
+        {errorAccion && (
+          <Alert variant="danger" title="No se pudo completar la acción">
+            {errorAccion}
+          </Alert>
+        )}
+        <FilaMovil
+          items={items}
+          cargando={fila.isPending}
+          error={fila.isError && !data ? mensajeError(fila.error) : undefined}
+          offsetMs={offsetMs}
+          conductores={conductores}
+          internos={internoPorVehiculo}
+          ocupado={ocupado}
+          progreso={progreso}
+          pendienteId={pendiente?.item.id ?? null}
+          onPedir={pedir}
+          recientes={data?.salidasRecientes ?? []}
+          baseMin={data?.baseMin}
+        />
+        {dialogo}
+      </>
+    );
+  }
 
   return (
     <Card
@@ -186,7 +226,7 @@ export function FilaEnVivo({
                 disabled={ocupado}
                 aria-busy={progreso('despachar', r.id)}
                 aria-label={`Despachar ${r.placa}`}
-                onClick={() => (r.habilitado ? void ejecutar('despachar', r) : setPendiente({ tipo: 'despachar', item: r }))}
+                onClick={() => pedir('despachar', r)}
               >
                 {progreso('despachar', r.id) ? TEXTO_PROGRESO.despachar : 'Despachar'}
               </Button>
@@ -224,15 +264,7 @@ export function FilaEnVivo({
         )}
         <Recientes salidas={data?.salidasRecientes ?? []} />
       </div>
-      <ConfirmDialog
-        open={pendiente !== null}
-        variant={pendiente?.tipo === 'retirar' ? 'danger' : 'primary'}
-        title={DIALOGO[pendiente?.tipo ?? 'despachar'].titulo}
-        message={pendiente ? DIALOGO[pendiente.tipo].mensaje(pendiente.item.placa) : undefined}
-        confirmLabel={DIALOGO[pendiente?.tipo ?? 'despachar'].confirmar}
-        onConfirm={confirmar}
-        onCancel={() => setPendiente(null)}
-      />
+      {dialogo}
     </Card>
   );
 }

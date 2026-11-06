@@ -1,5 +1,7 @@
 import { devices, expect, test, type Page } from '@playwright/test';
+import { EstadoFilaSalidaPanelSchema } from '../../packages/shared/src/entities/fila-salida';
 import { InfraccionHoySchema } from '../../packages/shared/src/entities/infraccion';
+import { JornadasDelDiaSchema } from '../../packages/shared/src/entities/jornada';
 import { PosicionEnVivoSchema } from '../../packages/shared/src/entities/en-vivo';
 import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
@@ -156,8 +158,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
   });
 
   test('Salidas: stepper de base, confirmación y Despachar a todo el ancho', async () => {
-    test.setTimeout(90_000);
-    // API mockeada (formas validadas contra @quivo/shared): una terminal, base 8 min, fila de 2 trufis.
+    test.setTimeout(120_000);
+    // API mockeada (formas validadas contra @quivo/shared): una terminal, base 8 min, fila de 3 trufis, 8 salidas recientes.
     const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
     const PC = uuid(3);
     const ahora = new Date();
@@ -168,12 +170,39 @@ test.describe('Panel móvil (Pixel 7)', () => {
       placa,
       posicion: n,
       llegadaTs: iso(-10),
-      etaTs: iso(habilitado ? 0 : 8),
+      etaTs: iso(habilitado ? 0 : 3 * n),
       esperaMs: 0,
       estado: 'en_fila',
       habilitado,
       demorado: false,
       anticipada: false,
+    });
+    const recientes = Array.from({ length: 8 }, (_, k) => ({
+      id: uuid(40 + k),
+      vehiculoId: uuid(60 + k),
+      placa: `90${k}0ZZZ`,
+      llegadaTs: iso(-60 - k * 8),
+      salidaTs: iso(-50 - k * 8),
+      salidaOrigen: 'boton',
+      anticipada: k === 1,
+    }));
+    const fila = EstadoFilaSalidaPanelSchema.parse({
+      puntoControlId: PC,
+      baseMin: 8,
+      servidorTs: ahora.toISOString(),
+      salidasRecientes: recientes,
+      // 1: aún no habilitado (salida anticipada); 2: no habilitado; 3: habilitado (despacho directo desde el menú).
+      items: [item(1, '1234ABC', false), item(2, '5678XYZ', false), item(3, '4321QWE', true)],
+    });
+    const jornadas = JornadasDelDiaSchema.parse({
+      fecha: ahora.toISOString().slice(0, 10),
+      vehiculos: [
+        {
+          sindicatoId: uuid(99), sindicatoNombre: 'Union', vehiculoId: uuid(21), placa: '1234ABC', numeroInterno: null,
+          conductorId: uuid(70), conductorNombre: 'Bravo Soliz Javier', lineaId: uuid(1), lineaNombre: 'Linea 120',
+          rutaSentido: 'ida', horaSalida: null, estado: 'dia_iniciado', inicioJornadaTs: null,
+        },
+      ],
     });
     const respuestas: Record<string, unknown> = {
       '/v1/lineas': [
@@ -194,16 +223,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
           obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8,
         },
       ],
-      [`/v1/salidas/${PC}/fila`]: {
-        puntoControlId: PC, baseMin: 8, servidorTs: ahora.toISOString(), salidasRecientes: [],
-        items: [item(1, '1234ABC', true), item(2, '5678XYZ', false)],
-      },
+      [`/v1/salidas/${PC}/fila`]: fila,
       [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
+      '/v1/reportes/jornadas': jornadas,
       '/v1/vehiculos': [],
       '/v1/grupos-vehiculo': [],
     };
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
     let puts = 0;
+    const posts: string[] = [];
     try {
       await page.route('**/v1/**', async (route) => {
         const req = route.request();
@@ -211,6 +239,10 @@ test.describe('Panel móvil (Pixel 7)', () => {
         if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
         if (path === `/v1/salidas/${PC}/base` && req.method() === 'PUT') {
           puts++;
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
+        }
+        if (req.method() === 'POST' && path.startsWith(`/v1/salidas/${PC}/fila/`)) {
+          posts.push(path.replace(`/v1/salidas/${PC}/fila/`, ''));
           return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
         }
         if (req.method() === 'GET' && path in respuestas) {
@@ -222,31 +254,119 @@ test.describe('Panel móvil (Pixel 7)', () => {
       const mas = page.getByRole('button', { name: 'Sumar un minuto' });
       await expect(mas).toBeVisible({ timeout: 30_000 });
       await expect(page.locator('.qv-base-rapida__valor')).toContainText('8');
+      // Encabezado: nombre de la terminal + conteo de la fila (la etiqueta ya trae la línea).
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('120 · ida · punto 1');
+      await expect(page.locator('.qv-page-header__subtitle')).toHaveText('3 en fila');
       for (const name of ['Restar un minuto', 'Sumar un minuto', 'Guardar']) {
         const box = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
         expect(box.width, name).toBeGreaterThanOrEqual(44);
         expect(box.height, name).toBeGreaterThanOrEqual(44);
       }
+      // Guardar en la misma fila que − y +; sin cambios está deshabilitado.
+      const guardar = page.getByRole('button', { name: 'Guardar', exact: true });
+      await expect(guardar).toBeDisabled();
+      const [bMenos, bGuardar] = await Promise.all([
+        page.getByRole('button', { name: 'Restar un minuto' }).boundingBox(),
+        guardar.boundingBox(),
+      ]);
+      expect(Math.abs(bMenos!.y - bGuardar!.y)).toBeLessThan(8);
 
       // Cambiar el valor habilita Guardar; la confirmación avisa que es permanente y se cancela sin guardar.
       await mas.click();
-      await page.getByRole('button', { name: 'Guardar', exact: true }).click();
+      await guardar.click();
       const dialogo = page.getByRole('alertdialog');
       await expect(dialogo).toContainText('permanente');
       await dialogo.getByRole('button', { name: 'Cancelar' }).click();
       await expect(dialogo).toBeHidden();
       expect(puts).toBe(0);
 
+      // Fila: conductor por vehículo (jornadas de hoy) y Despachar solo en la primera, a todo el ancho y de 60 px.
+      await expect(page.getByText('Bravo Soliz Javier')).toBeVisible();
       const viewport = page.viewportSize()!;
       const despachar = page.getByRole('button', { name: /^Despachar / });
-      await expect(despachar).toHaveCount(2);
-      for (const i of [0, 1]) {
-        const box = (await despachar.nth(i).boundingBox())!;
-        expect(box.height).toBeGreaterThanOrEqual(48);
-        expect(box.width).toBeGreaterThan(viewport.width * 0.6);
+      await expect(despachar).toHaveCount(1);
+      const boxD = (await despachar.boundingBox())!;
+      expect(boxD.height).toBeGreaterThanOrEqual(59.5);
+      expect(boxD.width).toBeGreaterThan(viewport.width * 0.8);
+
+      // Despacho anticipado: pide confirmación y solo despacha al confirmar.
+      await despachar.click();
+      await expect(dialogo).toContainText('todavía no está habilitado');
+      await dialogo.getByRole('button', { name: 'Cancelar' }).click();
+      await expect(dialogo).toBeHidden();
+      expect(posts).toEqual([]);
+      await despachar.click();
+      await dialogo.getByRole('button', { name: 'Despachar', exact: true }).click();
+      await expect.poll(() => posts).toEqual([`${uuid(11)}/despachar`]);
+
+      // Menú ⋮ por teclado (fila 2): Enter abre y enfoca el primer ítem, flechas se mueven, Escape devuelve el foco.
+      const kb2 = page.getByRole('button', { name: 'Más acciones de 5678XYZ' });
+      await expect(kb2).toHaveAttribute('aria-haspopup', 'menu');
+      await expect(kb2).toHaveAttribute('aria-expanded', 'false');
+      const kbBox = (await kb2.boundingBox())!;
+      expect(kbBox.width).toBeGreaterThanOrEqual(48);
+      expect(kbBox.height).toBeGreaterThanOrEqual(48);
+      await kb2.focus();
+      await page.keyboard.press('Enter');
+      const menu = page.getByRole('menu', { name: 'Acciones de 5678XYZ' });
+      await expect(menu).toBeVisible();
+      await expect(kb2).toHaveAttribute('aria-expanded', 'true');
+      await expect(menu.getByRole('menuitem', { name: 'Despachar' })).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+      await expect(menu.getByRole('menuitem', { name: 'Al final' })).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+      await expect(menu.getByRole('menuitem', { name: 'Retirar' })).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+      await expect(menu.getByRole('menuitem', { name: 'Despachar' })).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+      await expect(kb2).toBeFocused();
+      await expect(kb2).toHaveAttribute('aria-expanded', 'false');
+
+      // Clic afuera cierra; Tab cierra y deja el foco en el ⋮.
+      await kb2.click();
+      await expect(menu).toBeVisible();
+      await page.getByRole('heading', { level: 1 }).click();
+      await expect(menu).toBeHidden();
+      await kb2.click();
+      await page.keyboard.press('Tab');
+      await expect(menu).toBeHidden();
+
+      // "Al final" y "Retirar" abren sus confirmaciones; cancelar devuelve el foco al ⋮.
+      await kb2.click();
+      await menu.getByRole('menuitem', { name: 'Al final' }).click();
+      await expect(dialogo).toContainText('pasa al último lugar');
+      await dialogo.getByRole('button', { name: 'Cancelar' }).click();
+      await expect(kb2).toBeFocused();
+      await kb2.click();
+      await menu.getByRole('menuitem', { name: 'Retirar' }).click();
+      await expect(dialogo).toContainText('sale de la fila sin registrarse');
+      await dialogo.getByRole('button', { name: 'Retirar', exact: true }).click();
+      await expect.poll(() => posts).toEqual([`${uuid(11)}/despachar`, `${uuid(12)}/retirar`]);
+
+      // Fila 3 está habilitada: Despachar desde el menú va directo, sin confirmación.
+      await page.getByRole('button', { name: 'Más acciones de 4321QWE' }).click();
+      await page.getByRole('menu', { name: 'Acciones de 4321QWE' }).getByRole('menuitem', { name: 'Despachar' }).click();
+      await expect(dialogo).toBeHidden();
+      await expect.poll(() => posts).toEqual([`${uuid(11)}/despachar`, `${uuid(12)}/retirar`, `${uuid(13)}/despachar`]);
+
+      // Salidas recientes: plegado de entrada, con el conteo; se despliega a pedido.
+      const coll = page.getByRole('button', { name: /Salidas recientes/ });
+      await expect(coll).toHaveAttribute('aria-expanded', 'false');
+      await expect(coll).toContainText('8');
+      await expect(page.locator('.qv-fila-m__rec')).toHaveCount(8);
+      await expect(page.locator('.qv-fila-m__rec').first()).toBeHidden();
+      await coll.click();
+      await expect(coll).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.locator('.qv-fila-m__rec').first()).toBeVisible();
+
+      // Sin desborde horizontal a 412 y a 360 px.
+      for (const width of [viewport.width, 360]) {
+        await page.setViewportSize({ width, height: viewport.height });
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), { message: `desborda a ${width}` }).toBe(true);
       }
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     } finally {
+      await page.setViewportSize({ width: 412, height: 915 }); // Pixel 7
       await page.unrouteAll({ behavior: 'ignoreErrors' });
     }
   });

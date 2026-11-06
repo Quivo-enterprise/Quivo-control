@@ -6,6 +6,7 @@ import {
   type FilaSalidaPanelItem,
   type FrecuenciaRegla,
   type GrupoVehiculo,
+  type JornadaVehiculo,
 } from '@quivo/shared';
 
 /** `HH:mm` → minutos del día (0–1439); `null` si el texto no es una hora válida. */
@@ -149,4 +150,13 @@ export function validarBase(
     ok: false,
     mensaje: `Ingresá un número entero de ${FRECUENCIA_MIN_MINUTOS} a ${FRECUENCIA_MAX_MINUTOS} minutos${permiteVacio ? ', o dejalo vacío' : ''}.`,
   };
+}
+
+/** Conductor de hoy por vehículo (jornadas del día); omite los vehículos sin conductor asignado. */
+export function conductorPorVehiculo(
+  jornadas: ReadonlyArray<Pick<JornadaVehiculo, 'vehiculoId' | 'conductorNombre'>>,
+): Record<string, string> {
+  const mapa: Record<string, string> = {};
+  for (const j of jornadas) if (j.conductorNombre && !(j.vehiculoId in mapa)) mapa[j.vehiculoId] = j.conductorNombre;
+  return mapa;
 }

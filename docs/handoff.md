@@ -109,12 +109,26 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - La placa del formulario de vehículo se ajusta a su contenido.
     - `StatusBadge` con forma: lo usa Hoy (PR 4).
     - Gates: `/code-review` (8 hallazgos, 7 aplicados; `size="lg"` sin uso se descarta porque lo usa el PR 4), `/ponytail-review`, `web-design-guidelines` y `impeccable audit` 19/20.
-  - **PR 4 (Hoy):** commit local en la rama `feat/web-movil-diseno-b-hoy`, apilado sobre #316.
+  - **PR 4, #317, mergeado (`2169be3`).**
     - Resumen con el número primero, tile roja de alertas con chip de graves y búsqueda de 60 px.
-    - Tarjeta de resultado con placa grande, línea, estado, km/h, vuelta y "hace N s", más Llamar y WhatsApp con color.
+    - Tarjeta de resultado con placa grande, línea, estado, km/h (solo en `reportando`), vuelta y "hace N s" que avanza solo, más Llamar y WhatsApp con color.
     - El resumen va antes del buscador: decisión del CTO, aunque el comp B lo pone después. No hay nombre de calle porque no hay dato.
-  - **PR 5 (Alertas):** en curso.
-  - **Hallazgo previo, sin arreglar:** en Vehículos el botón flotante "Nuevo vehículo" tapa las acciones de la última fila. Va con el PR 7.
+    - Tokens nuevos: `--qv-color-danger-soft`, `--qv-color-danger-texto`, `--qv-color-warning-texto` y `--qv-color-whatsapp`.
+    - **Trampa:** los specs de `tests/acceptance` no pueden importar `@quivo/shared`, porque en CI la raíz solo tiene `@quivo/db`. Se importa por ruta relativa al fuente (`../../packages/shared/src/entities/...`).
+  - **PR 5, #318, mergeado (`7ca8d07`).**
+    - Chips de gravedad que cuentan según el filtro de estado (nombre accesible "Grave: 2 abiertas").
+    - Lista plana en el orden del API.
+    - "Ver en mapa" como ícono.
+    - Sanciones pendientes con conteo, que se invalida al sancionar. Escritorio no consulta `/sanciones`.
+    - La línea aparece si hay más de una.
+  - **PR 6 (Salidas):** este PR.
+    - Fila de tarjetas con Despachar a todo el ancho y menú ⋯ para el resto.
+    - Recientes, frecuencia base arriba y título con la terminal.
+    - El Despachar de escritorio comparte `pedir` y se verificó que se comporta igual.
+  - **PR 7 (Más), PR 8 (En vivo con chips y menú ⋯) y PR 9 (marcadores píldora):** commits locales apilados, esperando el rebase.
+    - PR 9: color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
+    - La key de Google Maps no funciona en localhost: los marcadores solo se verificaron en un harness aislado, no sobre el mapa real.
+  - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Pendiente:** `scroll-padding-top` está fijo en 62 px; un encabezado que se parte en dos líneas puede tapar el elemento con foco. Revisar en Salidas (PR 6).
   - **Codex: no verificado (sin cuota).**
 
