@@ -16,14 +16,18 @@ import { LineasService } from './lineas.service.js';
 class CrearLineaDto extends createZodDto(CrearLineaSchema) {}
 class ActualizarLineaDto extends createZodDto(ActualizarLineaSchema) {}
 
+const ROLES_LINEAS = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
+
 /** RF-20..23 — CRUD de líneas por sindicato (QUI-224). */
 @Controller('lineas')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato', 'operador')
+@Roles(...ROLES_LINEAS)
 export class LineasController {
   constructor(@Inject(LineasService) private readonly lineasService: LineasService) {}
 
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
+  @Roles(...ROLES_LINEAS, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.lineasService.listar(actor);
   }

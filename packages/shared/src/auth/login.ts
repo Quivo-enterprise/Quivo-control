@@ -70,3 +70,15 @@ export const AdminResetPasswordRequestSchema = z.object({
   newPassword: z.string().min(8).max(128),
 });
 export type AdminResetPasswordRequest = z.infer<typeof AdminResetPasswordRequestSchema>;
+
+/** Contrato de POST /v1/auth/admin/users — alta asistida de un usuario del panel por
+ * `admin_quivo`. Solo `delegado` (acotado a un sindicato existente): no se crean admins
+ * por esta vía. La contraseña se comunica fuera de banda, como en el reset. */
+export const AdminCrearUsuarioRequestSchema = z.object({
+  email: z.string().email(),
+  name: z.string().trim().min(1).max(120),
+  password: z.string().min(8).max(128),
+  rol: z.literal('delegado'),
+  sindicatoId: sindicatoIdSchema,
+});
+export type AdminCrearUsuarioRequest = z.infer<typeof AdminCrearUsuarioRequestSchema>;

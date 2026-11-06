@@ -83,6 +83,7 @@ function EnVivoContenido() {
   const [confirmandoSalida, setConfirmandoSalida] = useState(false);
   const puedeVerDias = user ? isRouteAllowedForRole(NAV_ITEMS, '/reportes/recorridos', user.rol) : false;
   const soloLectura = !puedeActuarEnInfracciones(user?.rol);
+  const puedeVerConductores = user ? isRouteAllowedForRole(NAV_ITEMS, '/conductores', user.rol) : false;
   const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
   const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
@@ -831,13 +832,15 @@ function EnVivoContenido() {
                     <div className="qv-live-toast qv-live-toast--info">
                       <CheckCircle2 size={14} aria-hidden="true" className="qv-live-toast__ico--ok" />
                       <span>Sesión finalizada</span>
-                      <button
-                        type="button"
-                        className="qv-live-toast__btn"
-                        onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
-                      >
-                        Ver histórico →
-                      </button>
+                      {puedeVerDias && (
+                        <button
+                          type="button"
+                          className="qv-live-toast__btn"
+                          onClick={() => router.push(`/reportes/recorridos/${sesionSeleccionada}`)}
+                        >
+                          Ver histórico →
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -917,6 +920,8 @@ function EnVivoContenido() {
               trazaRecibidoEn={traza.dataUpdatedAt}
               posicionesRecibidoEn={posiciones.dataUpdatedAt}
               soloLectura={soloLectura}
+              puedeVerDias={puedeVerDias}
+              puedeVerConductores={puedeVerConductores}
             />
           </div>
         )}

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   AdminLayout,
   MOBILE_QUERY,
+  ROLE_LABEL,
   SegmentedControl,
   SidebarNav,
   type MobileTab,
@@ -192,7 +193,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {user?.rol === 'admin_quivo' ? 'Admin Central' : 'Admin Sindicato'}
+                    {ROLE_LABEL[user?.rol ?? ''] ?? user?.rol}
                   </span>
                 </div>
               </div>

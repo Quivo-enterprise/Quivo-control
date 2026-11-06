@@ -6016,6 +6016,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font: 800 12px var(--qv-font-display);
   }
 
+}
+
+/* Píldora fuera del @media: Hoy también se monta a más de 720 px (delegado). */
   /* Píldora "En vivo" del encabezado de Hoy (comp .live). */
   .qv-live-pill {
     display: inline-flex;
@@ -6074,6 +6077,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
       color: #fcd34d;
     }
   }
+@media (max-width: 720px) {
 
   .qv-admin-layout--tabs .qv-admin-layout__content {
     padding-bottom: calc(var(--qv-space-md) + var(--qv-tabbar-h));
@@ -6665,8 +6669,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
-/* PR 4 — Hoy (celular, comp B "Señalética de garita"): resumen del día arriba, búsqueda y tarjeta de resultado. Solo se monta a <= 720 px. */
-@media (max-width: 720px) {
+/* PR 4 — Hoy (celular, comp B "Señalética de garita"): resumen del día arriba, búsqueda y tarjeta de resultado. Estilos a cualquier ancho: el delegado lo monta también en escritorio y en "Sitio de escritorio". */
   .qv-hoy {
     display: flex;
     flex-direction: column;
@@ -6937,7 +6940,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     min-height: 2.75rem;
     font-size: 0.9375rem;
   }
-}
 .qv-alertas__card .qv-live-btn:not(.qv-live-btn--primario),
 .qv-hoy__error-kpis .qv-live-btn {
   border: 2px solid var(--qv-text-secondary);

@@ -95,12 +95,12 @@ describe('/reportes/en-vivo para el operador y la designación (guards + DTO Zod
     expect((await put(sesion, { varianteId: null }, 'admin_sindicato')).statusCode).toBe(404);
   });
 
-  it('la designación es @Auditable (entidad vuelta, acción designar) y el controller declara los roles del control', () => {
+  it('la designación es @Auditable (entidad vuelta, acción designar) y el controller declara los roles del control y del delegado', () => {
     const proto = EnVivoController.prototype;
     expect(Reflect.getMetadata(AUDIT_ENTIDAD_KEY, proto.designar)).toBe('vuelta');
     expect(Reflect.getMetadata(AUDIT_ACCION_KEY, proto.designar)).toBe('designar');
     expect([...Reflect.getMetadata(ROLES_KEY, EnVivoController)].sort()).toEqual(
-      ['admin_quivo', 'admin_sindicato', 'operador'].sort(),
+      ['admin_quivo', 'admin_sindicato', 'operador', 'delegado'].sort(),
     );
   });
 

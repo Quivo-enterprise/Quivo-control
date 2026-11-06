@@ -25,7 +25,9 @@ const ROLES_PUNTOS_CONTROL = ['admin_quivo', 'admin_sindicato', 'operador'] as c
 export class RutaControlPointsController {
   constructor(@Inject(ControlPointsService) private readonly controlPointsService: ControlPointsService) {}
 
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
+  @Roles(...ROLES_PUNTOS_CONTROL, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('rutaId') rutaId: string) {
     return this.controlPointsService.listarPorRuta(actor, rutaId);
   }

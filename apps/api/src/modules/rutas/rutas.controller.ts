@@ -25,7 +25,9 @@ const ROLES_RUTAS = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
 export class LineaRutasController {
   constructor(@Inject(RutasService) private readonly rutasService: RutasService) {}
 
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
+  @Roles(...ROLES_RUTAS, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('lineaId') lineaId: string) {
     return this.rutasService.listarPorLinea(actor, lineaId);
   }

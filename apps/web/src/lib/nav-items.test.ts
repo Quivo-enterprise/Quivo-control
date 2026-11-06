@@ -5,6 +5,7 @@ import {
   isNavActive,
   isRouteAllowedForRole,
   itemsParaMas,
+  MOBILE_TAB_ITEMS,
   masActivo,
   NAV_ITEMS,
   rutaInicialParaRol,
@@ -161,5 +162,34 @@ describe('masActivo', () => {
   it('inactiva en las pestañas visibles', () => {
     for (const p of ['/', '/en-vivo', '/salidas', '/alertas']) expect(masActivo(p, 'admin_quivo')).toBe(false);
     expect(masActivo('/salidas', 'operador')).toBe(false);
+  });
+});
+
+describe('delegado (solo Hoy, En vivo, Salidas y Alertas)', () => {
+  it('ve exactamente esos cuatro ítems, también en escritorio', () => {
+    expect(filterNavItemsByRole(NAV_ITEMS, 'delegado').map((i) => i.href)).toEqual(['/', '/en-vivo', '/salidas', '/alertas']);
+  });
+
+  it('las cuatro pestañas del celular son suyas y Más no lista nada', () => {
+    expect(filterNavItemsByRole(MOBILE_TAB_ITEMS, 'delegado').map((i) => i.label)).toEqual(['Hoy', 'En vivo', 'Salidas', 'Alertas']);
+    expect(itemsParaMas('delegado')).toEqual([]);
+  });
+
+  it.each(['/vehiculos', '/conductores', '/reglas', '/socios', '/lineas', '/rutas', '/rotaciones', '/reportes', '/reportes/recorridos/abc', '/auditoria', '/sync-errores', '/usuarios', '/sindicatos'])(
+    '%s no está permitida y cae en Hoy',
+    (ruta) => {
+      expect(isRouteAllowedForRole(NAV_ITEMS, ruta, 'delegado')).toBe(false);
+      expect(rutaInicialParaRol(NAV_ITEMS, 'delegado')).toBe('/');
+    },
+  );
+
+  it('sus cuatro rutas sí entran', () => {
+    for (const ruta of ['/', '/en-vivo', '/salidas', '/alertas']) {
+      expect(isRouteAllowedForRole(NAV_ITEMS, ruta, 'delegado')).toBe(true);
+    }
+  });
+
+  it('el operador sigue igual: En vivo y Salidas, sin Alertas ni dashboard', () => {
+    expect(filterNavItemsByRole(NAV_ITEMS, 'operador').map((i) => i.href)).toEqual(['/en-vivo', '/salidas']);
   });
 });

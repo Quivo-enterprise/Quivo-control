@@ -45,6 +45,7 @@ import { conductoresApi } from '../../src/lib/api/conductores';
 import { rotacionesApi } from '../../src/lib/api/rotaciones';
 import { sancionesApi } from '../../src/lib/api/sanciones';
 import { syncErroresApi } from '../../src/lib/api/sync-errores';
+import { esDelegado } from '../../src/lib/nav-items';
 import { useEsMovil } from '../../src/lib/use-es-movil';
 import { HoyMovil } from './hoy-movil';
 
@@ -66,7 +67,9 @@ const ESTADO_LABEL_MAP: Record<string, string> = {
 
 export default function DashboardHomePage() {
   const esMovil = useEsMovil();
-  return esMovil ? <HoyMovil /> : <DashboardEscritorio />;
+  const { user } = useAuth();
+  // El dashboard de escritorio pide socios, vehículos, rotaciones y errores de sync (403 para `delegado`): él ve siempre Hoy.
+  return esMovil || esDelegado(user?.rol) ? <HoyMovil /> : <DashboardEscritorio />;
 }
 
 function DashboardEscritorio() {

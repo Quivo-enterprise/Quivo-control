@@ -31,18 +31,22 @@ class CrearVehiculoDto extends createZodDto(CrearVehiculoSchema) {}
 class ActualizarVehiculoDto extends createZodDto(ActualizarVehiculoSchema) {}
 class CambiarEstadoVehiculoDto extends createZodDto(CambiarEstadoVehiculoSchema) {}
 
+const ROLES_VEHICULOS = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
+
 /** RF-10..14 — CRUD de vehículos por sindicato (QUI-222). Mismo esquema de tenant-scoping
  * que socios (QUI-221): admin_quivo manda sindicatoId, el resto queda forzado al propio. */
 @Controller('vehiculos')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato', 'operador')
+@Roles(...ROLES_VEHICULOS)
 export class VehiculosController {
   constructor(
     @Inject(VehiculosService) private readonly vehiculosService: VehiculosService,
     @Inject(VehiculoFotoService) private readonly fotoService: VehiculoFotoService,
   ) {}
 
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
+  @Roles(...ROLES_VEHICULOS, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.vehiculosService.listar(actor);
   }

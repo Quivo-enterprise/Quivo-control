@@ -48,7 +48,7 @@ class DesignarVueltaDto extends createZodDto(DesignarVueltaSchema) {}
  */
 @Controller('reportes/en-vivo')
 @UseGuards(JwtAuthGuard, EnVivoUsuarioThrottlerGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato', 'operador')
+@Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
 @Throttle({ default: { limit: 1000, ttl: 60_000 } })
 export class EnVivoController {
   constructor(

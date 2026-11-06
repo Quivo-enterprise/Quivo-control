@@ -26,7 +26,7 @@ class BaseFrecuenciaDto extends createZodDto(BaseFrecuenciaSchema) {}
  */
 @Controller('salidas/:puntoControlId')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato', 'operador')
+@Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
 @Throttle({ default: { limit: 600, ttl: 60_000 } })
 export class SalidasPanelController {
   constructor(

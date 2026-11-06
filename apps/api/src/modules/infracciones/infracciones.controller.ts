@@ -24,7 +24,7 @@ class SancionarInfraccionDto extends createZodDto(SancionarInfraccionSchema) {}
  */
 @Controller('infracciones')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato')
+@Roles('admin_quivo', 'admin_sindicato', 'delegado')
 export class InfraccionesController {
   constructor(@Inject(InfraccionesService) private readonly infraccionesService: InfraccionesService) {}
 
