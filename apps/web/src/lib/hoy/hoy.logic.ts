@@ -29,7 +29,7 @@ export interface ResultadoHoy {
 export const BUSQUEDA_MIN = 2;
 export const BUSQUEDA_MAX_RESULTADOS = 20;
 
-/** Minúsculas sin tildes ni espacios/guiones: "4701 eha" encuentra "4701-EHA". */
+/** Minúsculas sin tildes ni espacios/guiones: "9001 tst" encuentra "9001-TST". */
 export function normalizarBusqueda(s: string): string {
   return s
     .normalize('NFD')
