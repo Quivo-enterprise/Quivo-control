@@ -23,11 +23,14 @@ interface MenuAccionesProps {
   items: ItemMenuAcciones[];
   /** `data-*` para que el llamador localice el disparador (devolver el foco al cerrar una hoja). */
   dataDisparador?: string;
-  disabled?: boolean;
+  /** Texto informativo (no enfocable) arriba del menú. */
+  resumen?: string | null;
+  /** Contador sobre el disparador (visible sin abrir el menú); se omite si no es > 0. */
+  insignia?: number | null;
 }
 
 /** Menú de acciones del móvil: botón con `aria-haspopup`, foco al primer ítem, flechas, Inicio/Fin, Escape/Tab/clic afuera cierran. */
-export function MenuAcciones({ children, etiqueta, className, items, dataDisparador, disabled }: MenuAccionesProps) {
+export function MenuAcciones({ children, etiqueta, className, items, dataDisparador, resumen, insignia }: MenuAccionesProps) {
   const [abierto, setAbierto] = useState(false);
   const raiz = useRef<HTMLDivElement>(null);
   const boton = useRef<HTMLButtonElement>(null);
@@ -36,12 +39,23 @@ export function MenuAcciones({ children, etiqueta, className, items, dataDispara
 
   const habilitados = () => [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
 
-  // Al abrir, el foco va al primer ítem habilitado (o al marcado, para un selector).
+  // Al abrir, el foco va al primer ítem habilitado (o al marcado, para un selector); sin ítems habilitados, al propio menú.
   useEffect(() => {
     if (!abierto) return;
     const lista = habilitados();
-    (lista.find((el) => el.getAttribute('aria-checked') === 'true' && el.getAttribute('role') === 'menuitemradio') ?? lista[0])?.focus();
+    (lista.find((el) => el.getAttribute('aria-checked') === 'true' && el.getAttribute('role') === 'menuitemradio') ?? lista[0] ?? menu.current)?.focus();
   }, [abierto]);
+
+  // Mientras está abierto, si un poll deshabilita el ítem enfocado (o el foco cae a <body>), pasa al primer ítem
+  // habilitado o, si no hay, al propio menú: así Escape y Tab siguen funcionando.
+  useEffect(() => {
+    const m = menu.current;
+    if (!abierto || !m) return;
+    const lista = habilitados();
+    const a = document.activeElement;
+    const perdido = !a || a === document.body || (m.contains(a) && (a === m ? lista.length > 0 : (a as HTMLButtonElement).disabled));
+    if (perdido) (lista[0] ?? m).focus();
+  });
 
   // Clic/toque fuera cierra (sin robar el foco a lo que se tocó).
   useEffect(() => {
@@ -90,7 +104,6 @@ export function MenuAcciones({ children, etiqueta, className, items, dataDispara
         aria-expanded={abierto}
         aria-controls={abierto ? menuId : undefined}
         aria-label={etiqueta}
-        disabled={disabled}
         {...(dataDisparador ? { [`data-${dataDisparador}`]: '' } : {})}
         onClick={() => setAbierto((a) => !a)}
         onKeyDown={(e) => {
@@ -101,9 +114,19 @@ export function MenuAcciones({ children, etiqueta, className, items, dataDispara
         }}
       >
         {children}
+        {typeof insignia === 'number' && insignia > 0 && (
+          <span className="qv-menu-ac__insignia" aria-hidden="true">
+            {insignia > 99 ? '99+' : insignia}
+          </span>
+        )}
       </button>
       {abierto && (
-        <div ref={menu} id={menuId} role="menu" aria-label={etiqueta} className="qv-menu-ac__menu" onKeyDown={teclas}>
+        <div ref={menu} id={menuId} role="menu" aria-label={etiqueta} tabIndex={-1} className="qv-menu-ac__menu" onKeyDown={teclas}>
+          {resumen && (
+            <p className="qv-menu-ac__resumen" role="presentation">
+              {resumen}
+            </p>
+          )}
           {items.map((item) => (
             <button
               key={item.clave}

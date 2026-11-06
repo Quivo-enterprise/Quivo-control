@@ -713,29 +713,6 @@ function EnVivoContenido() {
             </div>
           )}
 
-          {/* Móvil: chips flotantes (línea, ⋯ con Flota/Días/Seguir/Ampliar/Refrescar, salud). */}
-          {hayBarra && esMovil && (
-            <ChipsMapa
-              consulta={{ dataUpdatedAt: posiciones.dataUpdatedAt, isError: posiciones.isError }}
-              enServicio={flota.enServicio}
-              total={flota.total}
-              lineas={lineas}
-              lineaOptions={lineaOptions}
-              lineaFilter={lineaFilter}
-              onLinea={setLineaFilter}
-              puedeVerDias={puedeVerDias}
-              onDias={() => router.push('/reportes/recorridos')}
-              hayHud={hayHud}
-              onToggleFlota={() => setFlotaAbierta((v) => !v)}
-              seguir={seguir}
-              puedeSeguir={puedeSeguir}
-              onSeguir={alternarSeguir}
-              onAmpliar={() => setFitKeyOverride((v) => v + 1)}
-              onRefrescar={() => void handleManualRefresh()}
-              refrescando={isRefreshing}
-            />
-          )}
-
           {/* Controles del mapa (la frescura del vehículo seleccionado vive en su panel) */}
           {hayHud && !esMovil && (
             <div className="qv-live-controles" role="group" aria-label="Controles del mapa">
@@ -882,6 +859,37 @@ function EnVivoContenido() {
             )}
           </div>
         </div>
+
+        {/* Móvil: chips flotantes (línea, ⋯ con Flota/Días/alertas/Seguir/Ampliar/Refrescar, salud). Van fuera de
+        `.qv-live-mapa` (aísla su z-index) para que los menús abiertos queden sobre el cajón del vehículo. */}
+        {hayBarra && esMovil && (
+          <ChipsMapa
+            consulta={{ dataUpdatedAt: posiciones.dataUpdatedAt, isError: posiciones.isError }}
+            enServicio={flota.enServicio}
+            total={flota.total}
+            lineas={lineas}
+            lineaOptions={lineaOptions}
+            lineaFilter={lineaFilter}
+            onLinea={setLineaFilter}
+            puedeVerDias={puedeVerDias}
+            onDias={() => router.push('/reportes/recorridos')}
+            hayHud={hayHud}
+            onToggleFlota={() => setFlotaAbierta((v) => !v)}
+            seguir={seguir}
+            puedeSeguir={puedeSeguir}
+            onSeguir={alternarSeguir}
+            onAmpliar={() => setFitKeyOverride((v) => v + 1)}
+            onRefrescar={() => void handleManualRefresh()}
+            conteoNiveles={conteoNiveles}
+            nivelFiltro={nivelFiltro}
+            onNivel={setNivelFiltro}
+            alertasPendientes={alertasOrdenadas.length}
+            alertasEnMapa={alertasEnMapa}
+            abiertasHoy={abiertasHoy}
+            puedeVerAlertas={user ? isRouteAllowedForRole(NAV_ITEMS, '/alertas', user.rol) : false}
+            onSiguienteAlerta={irASiguienteAlerta}
+          />
+        )}
 
         {/* CAJÓN DEL VEHÍCULO (cabecera, acciones rápidas, infracciones, PCs y stats): columna de
         372 px a la derecha en escritorio; flota sobre el mapa en tablet y es hoja inferior en
