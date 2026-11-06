@@ -1378,6 +1378,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
           const cerrar = q('.qv-live-panel__m-top .qv-live-panel__cerrar').getBoundingClientRect();
           const placa = q('.qv-live-panel__m-top .qv-plate').getBoundingClientRect();
           const placaEl = q('.qv-live-panel__m-top .qv-plate');
+          const tagEl = q('.qv-live-panel__m-tag');
+          const tag = tagEl.getBoundingClientRect();
           const centro = document.elementFromPoint(cerrar.x + cerrar.width / 2, cerrar.y + cerrar.height / 2);
           const centroPlaca = document.elementFromPoint(placa.x + placa.width / 2, placa.y + placa.height / 2);
           return {
@@ -1385,9 +1387,16 @@ test.describe('Panel móvil (Pixel 7)', () => {
             cerrarW: cerrar.width, cerrarDerecha: cerrar.right, cerrarTapado: !centro?.closest('.qv-live-panel__cerrar'),
             placaTapada: !centroPlaca?.closest('.qv-plate'), placaRecortada: placaEl.scrollWidth - placaEl.clientWidth,
             hojaDerecha: hojaEl.getBoundingClientRect().right, ancho: window.innerWidth,
+            tagAncho: tagEl.getBoundingClientRect().width, tagTrunc: tagEl.scrollWidth - tagEl.clientWidth,
+            tagCentroY: tag.y + tag.height / 2, placaCentroY: placa.y + placa.height / 2, tagTexto: tagEl.textContent ?? '',
           };
         });
         const vp = `${w}x${h}`;
+        // Etiqueta de línea legible: larga → 2.ª fila sin truncar de más; corta → junto a la placa.
+        if (w === 360) {
+          expect(r.tagAncho, `etiqueta de línea legible ${vp}`).toBeGreaterThanOrEqual(150);
+          expect(r.tagTexto).toContain('Línea 120 Expreso');
+        }
         expect(r.hojaOverflow, `desborde de la hoja ${vp}`).toBeLessThanOrEqual(0);
         expect(r.paginaOverflow, `desborde de la página ${vp}`).toBeLessThanOrEqual(0);
         expect(r.cerrarW, `cerrar ≥44 ${vp}`).toBeGreaterThanOrEqual(44);
@@ -1402,6 +1411,20 @@ test.describe('Panel móvil (Pixel 7)', () => {
         await cerrar.click({ timeout: 5_000 });
         await expect(hoja).toHaveCount(0);
       }
+      // Nombre corto sin foto a 412 px: la etiqueta se queda en la fila de la placa, sin truncar.
+      await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [{ ...pos, lineaNombre: 'Línea 16', fotoUrl: null }] }));
+      await page.setViewportSize({ width: 412, height: 915 });
+      await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+      const corta = await page.evaluate(() => {
+        const t = document.querySelector('.qv-live-panel__m-tag') as HTMLElement;
+        const p = document.querySelector('.qv-live-panel__m-top .qv-plate') as HTMLElement;
+        const a = t.getBoundingClientRect(), b = p.getBoundingClientRect();
+        return { dy: Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)), trunc: t.scrollWidth - t.clientWidth, texto: t.textContent };
+      });
+      expect(corta.dy, 'etiqueta corta en la fila de la placa 412').toBeLessThanOrEqual(8);
+      expect(corta.trunc, 'etiqueta corta sin truncar 412').toBeLessThanOrEqual(1);
+      expect(corta.texto).toBe('Línea 16');
     } finally {
       await page.setViewportSize({ width: 412, height: 915 });
       await page.unroute('**/foto-qa.png');

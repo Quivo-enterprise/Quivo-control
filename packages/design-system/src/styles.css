@@ -4817,7 +4817,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-live-panel__m-top .qv-live-panel__cerrar {
     width: 48px;
     height: 48px;
-    margin-left: auto;
     border: 1.5px solid var(--qv-border-strong);
     border-radius: 12px;
     background: var(--qv-surface-card);
@@ -4828,10 +4827,28 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     flex-direction: column;
     gap: 8px;
   }
+  /* Foto y cerrar van fuera de flujo (arriba a la derecha); la etiqueta reserva su
+     sitio con margin-right. Si no cabe junto a la placa, cae sola a la 2.ª fila. */
   .qv-live-panel__m-top {
+    --m-reserva: 58px;
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .qv-live-panel__m-top:has(.qv-live-panel__m-foto) {
+    --m-reserva: 108px;
+  }
+  .qv-live-panel__m-top .qv-live-panel__cerrar {
+    position: absolute;
+    top: 0;
+    right: 0;
+  }
+  .qv-live-panel__m-top .qv-live-panel__placa--m {
+    min-height: 48px;
     display: flex;
     align-items: center;
-    gap: 10px;
   }
   .qv-live-panel__placa--m {
     line-height: 1;
@@ -4844,7 +4861,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
     font-size: 13px;
     font-weight: 700;
-    /* Única pieza que cede en 360 px: placa, foto y cerrar no se encogen. */
+    /* Única pieza que cede: placa, foto y cerrar no se encogen. */
+    margin-right: var(--m-reserva);
+    /* En la 2.ª fila ocupa todo el ancho (el margen reservado queda fuera); solo recorta pasado ese ancho. */
+    flex: none;
+    max-width: 100%;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4854,7 +4875,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     flex-shrink: 0;
   }
   .qv-live-panel__m-foto {
-    flex: none;
+    position: absolute;
+    top: 4px;
+    right: 58px;
     width: 40px;
     height: 40px;
     border-radius: 50%;
