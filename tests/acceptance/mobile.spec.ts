@@ -788,52 +788,79 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(page.getByRole('button', { name: 'Editar parada' })).toHaveCount(0);
   });
 
-  test('En vivo: barra compacta, sin overflow, Flota abre y Escape cierra', async () => {
+  test('En vivo: chips flotantes sin choque ni overflow a 412 y 360 px; Flota (⋯) abre y Escape cierra', async () => {
     test.setTimeout(90_000);
     await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    const barra = page.getByLabel('Barra de mando de En vivo');
-    await expect(barra).toBeVisible({ timeout: 30_000 });
+    const chips = page.locator('.qv-chips-mapa');
+    await expect(chips).toBeVisible({ timeout: 30_000 });
+    // Mapa limpio: ni barra de mando ni la tarjeta de controles de escritorio.
+    await expect(page.getByLabel('Barra de mando de En vivo')).toHaveCount(0);
+    await expect(page.locator('.qv-live-controles')).toHaveCount(0);
     const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
     await expect(tabbar).toBeVisible();
     const tabbarBox = (await tabbar.boundingBox())!;
-    const barraBox = (await barra.boundingBox())!;
-    expect(barraBox.y + barraBox.height, 'la barra de mando no debe pisar la tabbar').toBeLessThanOrEqual(tabbarBox.y + 1);
     const shellBox = (await page.locator('.qv-live-standalone-shell').boundingBox())!;
     expect(shellBox.y + shellBox.height, 'la pantalla En vivo no debe pisar la tabbar').toBeLessThanOrEqual(tabbarBox.y + 1);
-    await expect(page.locator('.qv-live-barra__salir')).toBeHidden(); // Salir/Panel viven en Más y Hoy
     await expect(tabbar.getByRole('link', { name: 'Más', exact: true })).toHaveAttribute('href', '/mas'); // Salir/Panel viven en Más y Hoy
-    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(120); // 2 filas: ~112 px medidos a 412 px con base de 16 px
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    const linea = chips.getByRole('button', { name: /Cambiar línea/ });
+    const mas = chips.getByRole('button', { name: 'Más opciones del mapa' });
+    const salud = chips.locator('.qv-chip-mapa--salud');
+    await expect(salud).toContainText(/\d+ de \d+/, { timeout: 30_000 });
+    const original = page.viewportSize()!;
+    try {
+      for (const ancho of [412, 360]) {
+        await page.setViewportSize({ width: ancho, height: 800 });
+        const cajas = [(await linea.boundingBox())!, (await mas.boundingBox())!, (await salud.boundingBox())!];
+        for (const c of cajas) {
+          expect(c.x, `${ancho}px: dentro del viewport`).toBeGreaterThanOrEqual(0);
+          expect(c.x + c.width, `${ancho}px: dentro del viewport`).toBeLessThanOrEqual(ancho);
+          expect(c.height).toBe(48);
+        }
+        for (let i = 0; i < cajas.length; i++) {
+          for (let j = i + 1; j < cajas.length; j++) {
+            const [p, q] = [cajas[i], cajas[j]];
+            const choca = p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height;
+            expect(choca, `${ancho}px: los chips ${i} y ${j} no se superponen`).toBe(false);
+          }
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+      }
+    } finally {
+      await page.setViewportSize(original);
+    }
 
-    const flota = page.getByRole('button', { name: 'Flota', exact: true });
     // Esperar a que carguen los datos: o hay panel de Flota (jornada activa) o el estado vacío.
     await expect(
       page.locator('#qv-live-flota').or(page.getByText('Sin vehículos en ruta activa')),
     ).toBeAttached({ timeout: 30_000 });
+    const abrirFlota = async () => {
+      await mas.click();
+      await page.getByRole('menuitem', { name: 'Flota', exact: true }).click();
+    };
     if ((await page.locator('#qv-live-flota').count()) === 0) {
-      await expect(flota).toBeDisabled();
+      await mas.click();
+      await expect(page.getByRole('menuitem', { name: 'Flota', exact: true })).toBeDisabled();
       test.info().annotations.push({ type: 'skip-parte', description: 'sin jornada activa en el seed: no hay panel de Flota' });
       return;
     }
-    await flota.click();
-    await expect(flota).toHaveAttribute('aria-pressed', 'true');
+    await abrirFlota();
     await expect(page.locator('#qv-live-flota')).toBeVisible();
     // Con un vehículo seleccionado, su cajón se oculta mientras Flota está abierta.
     if ((await page.locator('.qv-live-cajon').count()) > 0) {
       await expect(page.locator('.qv-live-cajon')).toBeHidden();
     }
     await page.keyboard.press('Escape');
-    await expect(flota).toHaveAttribute('aria-pressed', 'false');
-    await expect(flota).toBeFocused();
+    await expect(page.locator('#qv-live-flota')).toBeHidden();
+    await expect(mas).toBeFocused();
 
     // Tocar el fondo también cierra y devuelve el foco.
-    await flota.click();
-    await expect(flota).toHaveAttribute('aria-pressed', 'true');
+    await abrirFlota();
+    await expect(page.locator('#qv-live-flota')).toBeVisible();
     const fondo = page.locator('.qv-live-flota-fondo');
     const caja = (await fondo.boundingBox())!;
     await page.mouse.click(caja.x + caja.width - 8, caja.y + caja.height / 2);
-    await expect(flota).toHaveAttribute('aria-pressed', 'false');
-    await expect(flota).toBeFocused();
+    await expect(page.locator('#qv-live-flota')).toBeHidden();
+    await expect(mas).toBeFocused();
   });
 
   test('Alertas: la pestaña navega, tarjetas con acciones >= 44 px y sin overflow', async () => {
@@ -1179,7 +1206,35 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
-  test('En vivo: el resumen cuenta las alertas abiertas de hoy aunque /posiciones no las traiga', async () => {
+  test('En vivo: enlace profundo abre la hoja y Seguir (⋯) se alterna', async () => {
+    test.setTimeout(90_000);
+    const sesionId = '00000000-0000-4000-8000-0000000000f1';
+    const vehiculoId = '00000000-0000-4000-8000-0000000000e1';
+    const pos = {
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      lineaId: '00000000-0000-4000-8000-0000000000d1', lineaNombre: 'Línea 16', rutaSentido: 'ida',
+      lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId,
+    };
+    await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
+    try {
+      await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+      await expect(page).toHaveURL(/\/en-vivo$/); // el parámetro se consume
+      await expect(page.locator('.qv-chip-mapa--salud')).toContainText('1 de 1');
+      const mas = page.getByRole('button', { name: 'Más opciones del mapa' });
+      await mas.click();
+      const seguir = page.getByRole('menuitemcheckbox', { name: 'Seguir' });
+      await expect(seguir).toBeEnabled();
+      await expect(seguir).toHaveAttribute('aria-checked', 'true');
+      await seguir.click();
+      await mas.click();
+      await expect(page.getByRole('menuitemcheckbox', { name: 'Seguir' })).toHaveAttribute('aria-checked', 'false');
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
+    }
+  });
+
+  test('En vivo: sin contadores de alerta en el mapa; las alertas del día viven en la pestaña Alertas', async () => {
     test.setTimeout(90_000);
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
     const pos = {
@@ -1194,38 +1249,16 @@ test.describe('Panel móvil (Pixel 7)', () => {
       id: id(100 + n), sesionId: id(200 + n), tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
       vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     });
-    let hoy: unknown[] = [alerta(1), alerta(2), alerta(3)];
     await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
-    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: hoy }));
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [alerta(1), alerta(2), alerta(3)] }));
     try {
       await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      const barra = page.getByLabel('Barra de mando de En vivo');
-      await expect(barra).toContainText('3 alertas abiertas', { timeout: 30_000 });
-      await expect(barra).not.toContainText('Sin infracciones abiertas');
-      await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveAttribute('href', '/alertas');
-      await expect(barra.getByRole('button', { name: 'Siguiente alerta' })).toHaveCount(0);
-
-      // Con alertas abiertas la campana no es verde (el verde es "todo en orden").
-      const colores = await barra.locator('.qv-live-alertas__vacio svg').evaluate((el) => {
-        const sonda = document.createElement('i');
-        sonda.style.color = 'var(--qv-color-success)';
-        document.body.appendChild(sonda);
-        const exito = getComputedStyle(sonda).color;
-        sonda.remove();
-        return { icono: getComputedStyle(el).color, exito };
-      });
-      expect(colores.icono).not.toBe(colores.exito);
-
-      hoy = [];
-      await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(barra).toContainText('Sin infracciones abiertas', { timeout: 30_000 });
-      await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveCount(0);
-
-      // Sin datos y con la consulta fallando (reintentos ~15 s) no queda un grupo vacío.
-      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
-      await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ status: 500, json: { message: 'x' } }));
-      await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(barra).toContainText('Alertas del día sin cargar', { timeout: 40_000 });
+      await expect(page.locator('.qv-chip-mapa--salud')).toContainText('1 de 1', { timeout: 30_000 });
+      await expect(page.locator('.qv-live-alertas')).toHaveCount(0);
+      await expect(page.locator('.qv-live-mapa')).not.toContainText(/alertas? abiertas?|Sin infracciones/i);
+      await expect(page.getByRole('button', { name: 'Siguiente alerta' })).toHaveCount(0);
+      const alertas = page.getByRole('navigation', { name: 'Pestañas', exact: true }).getByRole('link', { name: /Alertas/ });
+      await expect(alertas.locator('.qv-tabbar__badge')).toHaveText('3');
     } finally {
       await page.unroute('**/v1/reportes/en-vivo/posiciones*');
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
@@ -1273,7 +1306,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(panel).toHaveCount(0);
       // Vehículo que no está en las posiciones de hoy: sin panel, con aviso, y el parámetro también se consume.
       await page.goto('/en-vivo?vehiculo=00000000-0000-4000-8000-0000000000ff', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(page.getByLabel('Barra de mando de En vivo')).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator('.qv-chips-mapa')).toBeVisible({ timeout: 30_000 });
       await page.waitForTimeout(1_500);
       await expect(page.getByLabel(/Detalle del vehículo/)).toHaveCount(0);
       await expect(page).toHaveURL(/\/en-vivo$/);
@@ -1478,6 +1511,143 @@ test.describe('Más por rol (sesión simulada)', () => {
     await p.getByRole('button', { name: 'Cerrar sesión' }).click();
     await expect(p).toHaveURL(/\/login\/?$/, { timeout: 30_000 });
     expect(await p.evaluate(() => window.localStorage.getItem('quivo.session'))).toBeNull();
+    await context.close();
+  });
+});
+
+test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
+  const linea = (n: number, codigo: string, nombreCorto: string) => ({
+    id: id(n), sindicatoId: id(1), codigo, nombre: nombreCorto, nombreCorto, color: '#7c3aed',
+  });
+  const vehiculo = (n: number, lineaId: string, placa: string, estadoFrescura: string) => ({
+    id: id(300 + n), deviceId: `d${n}`, activa: true, vehiculoPlaca: placa, conductorNombre: 'Bravo Soliz J.', lineaId, lineaNombre: 'X',
+    rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura, vehiculoId: id(400 + n), infraccionesAbiertas: 0,
+  });
+  const posiciones = [vehiculo(1, id(11), '1616PIL', 'reportando'), vehiculo(2, id(12), '4701EHA', 'finalizado')];
+
+  async function abrir(browser: import('@playwright/test').Browser, baseURL: string | undefined, rol: string, url = '/en-vivo') {
+    const { context, page: p } = await paginaConSesion(browser, baseURL, rol);
+    await p.route('**/v1/lineas', (r) => r.fulfill({ json: [linea(11, '16', 'Línea 16'), linea(12, '120', '120')] }));
+    await p.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: posiciones }));
+    await p.route('**/v1/reportes/en-vivo/molinos*', (r) => r.fulfill({ json: { lineas: [], colas: [] } }));
+    // Errores de consola, salvo ruido conocido: recursos de red que fallan (el mock/CDN/mapa no existe en CI) y la
+    // queja de RouteMap por no tener NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (la acceptance corre sin key a propósito).
+    const errores: string[] = [];
+    p.on('console', (m) => {
+      const t = m.text();
+      if (m.type() === 'error' && !/Failed to load resource|net::ERR_|falta NEXT_PUBLIC_GOOGLE_MAPS_API_KEY|maps\.googleapis|Google Maps/i.test(t)) errores.push(t);
+    });
+    p.on('pageerror', (e) => errores.push(`pageerror: ${e.message}`));
+    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await expect(p.locator('.qv-chip-mapa--salud')).toContainText('1 de 2', { timeout: 30_000 }); // en servicio de total: finalizado no cuenta
+    return { context, p, errores };
+  }
+
+  test('carga sin errores de consola y el chip de salud lee "1 de 2 · hace N s" con espaciado normal', async ({ browser }, testInfo) => {
+    const { context, p, errores } = await abrir(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    await p.waitForTimeout(1_500); // deja correr el tick de 1 Hz y un poll
+    expect(errores).toEqual([]);
+    const chip = p.locator('.qv-chip-mapa--salud');
+    await expect(chip).toHaveText(/1 de 2\s*· hace \d+\s*s/);
+    // sin espacio de más: el hueco entre "de 2" y "·" es solo el `gap` del flex (8 px), no gap + espacio literal
+    const hueco = await chip.evaluate((el) => {
+      const [a, b] = Array.from(el.querySelectorAll(':scope > span:not([role])')).map((n) => n.getBoundingClientRect());
+      return b.left - a.right;
+    });
+    expect(hueco).toBeLessThanOrEqual(9);
+    await context.close();
+  });
+
+  test('selector de línea: filtra la flota y el chip cambia de nombre', async ({ browser }, testInfo) => {
+    const { context, p } = await abrir(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    const chip = p.getByRole('button', { name: /Cambiar línea/ });
+    await expect(chip).toHaveAccessibleName(/Todas las líneas/);
+    await chip.click();
+    const menu = p.getByRole('menu', { name: /Cambiar línea/ });
+    await expect(menu.getByRole('menuitemradio')).toHaveText(['Todas las líneas', 'Línea 16', '120']);
+    await expect(menu.getByRole('menuitemradio', { name: 'Todas las líneas' })).toHaveAttribute('aria-checked', 'true');
+    await menu.getByRole('menuitemradio', { name: '120' }).click();
+    await expect(menu).toHaveCount(0);
+    await expect(chip).toContainText('120');
+    await expect(chip).toBeFocused();
+    await expect(p.locator('.qv-chip-mapa--salud')).toContainText('0 de 1'); // la 120 solo tiene el finalizado
+    await chip.click();
+    await p.getByRole('menuitemradio', { name: 'Todas las líneas' }).click();
+    await expect(p.locator('.qv-chip-mapa--salud')).toContainText('1 de 2');
+    await context.close();
+  });
+
+  test('menú ⋯: teclado (flechas, Inicio/Fin, Escape, Tab) y cada ítem funciona', async ({ browser }, testInfo) => {
+    const { context, p } = await abrir(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    const mas = p.getByRole('button', { name: 'Más opciones del mapa' });
+    const menu = p.getByRole('menu', { name: 'Más opciones del mapa' });
+    const item = (n: string) => p.getByRole(n === 'Seguir' ? 'menuitemcheckbox' : 'menuitem', { name: n, exact: true });
+    await expect(mas).toHaveAttribute('aria-haspopup', 'menu');
+    await mas.focus();
+    await p.keyboard.press('ArrowDown');
+    await expect(menu).toBeVisible();
+    await expect(item('Flota')).toBeFocused();
+    await expect(menu.getByRole('menuitem').or(menu.getByRole('menuitemcheckbox'))).toHaveText(['Flota', 'Días anteriores', 'Seguir', 'Ampliar', 'Refrescar']);
+    await expect(item('Seguir')).toBeDisabled(); // sin vehículo abierto no hay a quién seguir
+    await p.keyboard.press('End');
+    await expect(item('Refrescar')).toBeFocused();
+    await p.keyboard.press('ArrowDown'); // vuelta al inicio
+    await expect(item('Flota')).toBeFocused();
+    await p.keyboard.press('ArrowDown');
+    await expect(item('Días anteriores')).toBeFocused();
+    await p.keyboard.press('Home');
+    await expect(item('Flota')).toBeFocused();
+    await p.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(mas).toBeFocused();
+    await p.keyboard.press('Enter');
+    await expect(item('Flota')).toBeFocused();
+    await p.keyboard.press('Tab'); // cierra; el Tab del navegador sigue desde el ⋯
+    await expect(menu).toHaveCount(0);
+    await expect(p.locator('body')).not.toBeFocused();
+
+    // Clic afuera cierra.
+    await mas.click();
+    await expect(menu).toBeVisible();
+    await p.mouse.click(200, 400);
+    await expect(menu).toHaveCount(0);
+
+    // Refrescar: pide posiciones al instante (el poll normal es cada 2 s).
+    await p.waitForResponse((r) => r.url().includes('/reportes/en-vivo/posiciones'));
+    await mas.click();
+    const pedido = p.waitForRequest((r) => r.url().includes('/reportes/en-vivo/posiciones'), { timeout: 1_200 });
+    await item('Refrescar').click();
+    await pedido;
+    await expect(mas).toBeFocused();
+
+    // Ampliar: cierra el menú y devuelve el foco (el reencuadre lo hace el mapa).
+    await mas.click();
+    await item('Ampliar').click();
+    await expect(menu).toHaveCount(0);
+    await expect(mas).toBeFocused();
+
+    // Flota: abre el panel con Space.
+    await mas.click();
+    await item('Flota').focus();
+    await p.keyboard.press('Space');
+    await expect(p.locator('#qv-live-flota')).toBeVisible();
+    await p.keyboard.press('Escape');
+    await expect(p.locator('#qv-live-flota')).toBeHidden();
+    await expect(mas).toBeFocused();
+
+    // Días anteriores: navega a los recorridos.
+    await mas.click();
+    await item('Días anteriores').click();
+    await expect(p).toHaveURL(/\/reportes\/recorridos/, { timeout: 30_000 });
+    await context.close();
+  });
+
+  test('menú ⋯: "Días anteriores" solo aparece si el rol puede verlos (operador no)', async ({ browser }, testInfo) => {
+    const { context, p } = await abrir(browser, testInfo.project.use.baseURL, 'operador');
+    await p.getByRole('button', { name: 'Más opciones del mapa' }).click();
+    await expect(p.getByRole('menuitem', { name: 'Flota', exact: true })).toBeVisible();
+    await expect(p.getByRole('menuitem', { name: 'Días anteriores' })).toHaveCount(0);
     await context.close();
   });
 });
