@@ -6,6 +6,34 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## 2026-11-06: vecinos de ruta sin la fila de la terminal (#338, `f0e43cc`, r43)
+
+Reporte del CTO (6/11): 3115SRI veía que el trufi de "delante" cambiaba muchas veces. Plan: `docs/plan-vecinos-ruta.md`.
+
+**Causa.** Los trufis parados en la fila siguen `en_curso`, con fase `ida` y progreso ≈ 0, así que contaban como "delante" de quien terminaba la vuelta. El desempate por fix más reciente los alternaba.
+
+**Cambio (solo API y shared, sin APK ni OTA).**
+- Se excluyen los candidatos con `fila_salida.estado = 'en_fila'`.
+- En circuito partido se descartan los candidatos sin fase.
+- Frescura de candidatos: 5 min (`UMBRAL_VECINO_RUTA_FRESCO_MS`). Mi fix guardado y cola-molinos siguen en 10 min.
+- Empate por `sesionId`.
+
+**Doble vía.** Ya estaba resuelto por la fase: cada trufi se proyecta en su ramal. El hueco era la fase nula, que ahora se descarta. La base no guarda rumbo GPS.
+
+**Deploy r43 (6/11, ~12:55 hora Bolivia, solo API).** `quivo-api-00063-nzn` (`api:r43-20261106`), 100 % del tráfico. `/v1/health/ready` ok; `vecinos` responde 200 en la revisión nueva y sin errores en sus logs a esa hora (muestra chica: 1 request).
+
+**Verificación.**
+- Replay de 3115SRI con datos del 6/11: en 14:55–15:30Z, de 7 a 2 cambios de "delante"; en 13:00–16:30Z, de 19 a 10. Con límite de 10 min el total es el mismo.
+- Límites del replay: fase por cumplimientos (no `vueltas`), "en fila" aproximado por distancia a la terminal.
+- Los cambios restantes no son todos adelantamientos: hay movimientos reales, huecos de GPS de más de 5 min y ruido del propio 3115SRI (sesiones superpuestas, hueco de GPS desde 15:24). Su retroceso de 15:47 quedó sin explicar.
+- **Falta:** confirmar con el chofer o con un replay de un día posterior al deploy. Codex: no verificado (sin cuota).
+
+**Pendientes.**
+- App: `estado-vecinos.ts` sigue con 10 min para ocultar datos sin red. Alinear en la próxima OTA.
+- Candidato sin fase: no aparece hasta su primer punto de control.
+- **CI intermitente por las tardes:** `vecinos-ruta.service.test.ts` falló sin relación con el cambio. `ci` pasó al tercer intento. Hipótesis sin confirmar: `rotaciones.service.test.ts` corre `cerrarSesionesVencidas(new Date())` en paralelo y, desde ~15:00 UTC, la regla B cierra las sesiones de ese test (reloj fijo a las 12:00 UTC). También hubo deadlocks por `crear_particion_gps_points`.
+- Chrome 91 real: métricas DOM correctas (`:has` no soportado, sin overflow, sidebar oculta, tabbar visible). La captura visual salió de la pestaña equivocada; repetir.
+
 ## 2026-11-06: barra blanca en Chrome 95, sesión del panel estable y rol `delegado`
 
 Pedidos del CTO (6/11):
