@@ -633,7 +633,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       expect(suyo.delante!.distanciaM).toBeCloseTo(mio.detras!.distanciaM, 0);
     });
 
-    it('una vuelta en curso de ayer (regreso) no da fase: proyección global', async () => {
+    it('una vuelta en curso de ayer (regreso) no da fase ⇒ se descarta en circuito partido', async () => {
       const yo = await crearSesion({ placa: 'VRAYM', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
       await crearSesion({
         placa: 'VRAYC',
@@ -643,8 +643,9 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
         edadVueltaMs: 24 * 60 * MINUTO,
       });
       const r = await service.obtener(yo, {}, AHORA);
-      // Sin la fase de ayer cae en la ida (~183 m DETRÁS), no ~1,66 km por delante.
-      expect(r.detras!.distanciaM).toBeLessThan(250);
+      // Sin la fase de ayer el candidato no tiene fase ⇒ no se devuelve en ningún lado.
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
     });
 
     it('una vuelta iniciada 30 min antes de la jornada (gracia de medianoche) conserva su fase', async () => {
@@ -660,7 +661,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       expect(r.delante?.placa).toBe('VRGRC');
     });
 
-    it('una vuelta iniciada más de 2 h antes de la jornada pierde la fase', async () => {
+    it('una vuelta iniciada más de 2 h antes de la jornada pierde la fase ⇒ se descarta en circuito partido', async () => {
       const yo = await crearSesion({ placa: 'VRGLM', rutaId: rutaCerradaId, pos: OTRO_IDA, fase: 'ida' });
       await crearSesion({
         placa: 'VRGLC',
@@ -670,7 +671,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
         edadVueltaMs: edadAntesDeJornada(150),
       });
       const r = await service.obtener(yo, {}, AHORA);
-      expect(r.detras!.distanciaM).toBeLessThan(250);
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
     });
 
     it('`fase` del request manda sobre la derivada de `vueltas` (y sin vuelta se usa la del request)', async () => {
@@ -820,8 +822,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
   });
 
   describe('fase deducida del último cumplimiento (sesión sin vuelta en curso)', () => {
-    // Mismo GPS ambiguo (3 m de la ida) que arriba: sin fase cae en la ida (~183 m DETRÁS del otro);
-    // en regreso queda ~1,66 km por delante del otro (que va por la ida, ~1,10 km).
+    // Mismo GPS ambiguo (3 m de la ida) que arriba: sin fase el candidato se descarta (circuito
+    // partido); en regreso queda ~1,66 km por delante del otro (que va por la ida, ~1,10 km).
     const AMBIGUA = { lng: -58.39, lat: -34.60003 };
     const OTRO_IDA = { lng: -58.388, lat: LAT };
 
@@ -847,7 +849,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       });
     }
 
-    /** Veo al candidato (sin vuelta) desde un vecino en la ida; devuelve a qué distancia lo ubico. */
+    /** Veo al candidato (sin vuelta) desde un vecino en la ida; devuelve a qué distancia lo ubico (null si se descarta). */
     async function distanciaAlCandidato(
       cumplimientos: (c: SesionMovilAutenticada) => Promise<void>,
     ): Promise<{ delante: number | null; detras: number | null }> {
@@ -885,19 +887,22 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       expect(r.delante).toBeGreaterThan(1_600);
     });
 
-    it('un cumplimiento de la jornada de ayer no da fase (sesión abierta de ayer)', async () => {
+    it('un cumplimiento de la jornada de ayer no da fase ⇒ se descarta en circuito partido', async () => {
       const r = await distanciaAlCandidato((c) => cumplir(c, pcRetornoId, 24 * 60));
-      expect(r.detras).toBeLessThan(250);
+      expect(r.delante).toBeNull();
+      expect(r.detras).toBeNull();
     });
 
-    it('sin cumplimientos (o con cumplido=false) ⇒ sin fase: proyección global como antes', async () => {
+    it('sin cumplimientos (o con cumplido=false) ⇒ sin fase ⇒ se descarta en circuito partido', async () => {
       const sin = await distanciaAlCandidato(async () => {});
-      expect(sin.detras).toBeLessThan(250);
+      expect(sin.delante).toBeNull();
+      expect(sin.detras).toBeNull();
 
       service.limpiarCache();
       await limpiarFixtures();
       const fallido = await distanciaAlCandidato((c) => cumplir(c, pcRetornoId, 10, false));
-      expect(fallido.detras).toBeLessThan(250);
+      expect(fallido.delante).toBeNull();
+      expect(fallido.detras).toBeNull();
     });
   });
 });
