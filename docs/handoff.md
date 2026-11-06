@@ -108,6 +108,21 @@ Pedidos del CTO (6/11):
   - Confirmar en el Xiaomi real que la franja blanca ya no aparece.
   - Si se puede, actualizar Chrome en ese celular.
 
+**Rotaciones L16 del 7 al 13/11 (OK del CTO: "sí, para varios días").**
+- Pares trufi–conductor copiados de las rotaciones `linea-16-20261106*` del 6/11. Son 37 trufis reales; los `*TST` (flota de prueba de Sacaba, conductores repetidos) quedan afuera.
+- Publicadas cuatro rotaciones:
+  - `linea-16-20261107-13`: 105 asignaciones.
+  - `l16-20261107-13-b`: 142. La primera carga la cortó el throttle (429) y una rotación publicada no se puede editar.
+  - `l16-20261108-13-c`: 6.
+  - `l16-20261108-13-d`: 6, en turno **tarde**.
+- Las rotaciones `-c` y `-d` existen por la rotación de panel "hoy", que tiene conductores al azar y ocupa 12 combinaciones trufi-día entre el 8 y el 13/11.
+  - No se anuló: no es mía y anularla corta logins.
+  - Donde "hoy" ocupa el turno de la mañana, la API da 409. Por eso esos casos van a la tarde: el login no filtra por turno y `venceAt` es 23:59 hora Bolivia.
+- Verificado por día: los 37 trufis tienen una asignación vigente con su propio conductor, 0 faltantes. Hay 2 trufis por día con una asignación extra de "hoy".
+- **Pendiente:**
+  - El 14/11 en adelante vuelve el 409 "sin rotación publicada".
+  - Limpiar las rotaciones de panel de prueba ("hoy" ×2, "Dkdkd", `sdasd` en borrador) cuando el CTO lo decida.
+
 ## Cerrado — 2026-11-05: Quivo Control móvil, fase 2 (escala + rediseño foco)
 
 Plan: [`docs/plan-movil-rediseno.md`](plan-movil-rediseno.md). El CTO vio el responsive de A/B/C como una "mini versión" del panel.
