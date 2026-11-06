@@ -5404,17 +5404,65 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
-/* PR D — escala móvil (<= 720 px): base 18 px (todo es rem) e inputs >= 16 px (iOS hace zoom por debajo). */
+/* PR D — escala móvil (<= 720 px): inputs >= 16 px (iOS hace zoom por debajo). */
 @media (max-width: 720px) {
-  html {
-    font-size: 112.5%;
-  }
-
   .qv-input__control,
   .qv-select-trigger,
   .qv-textarea,
   .qv-live-inf__input {
     font-size: max(16px, var(--qv-text-sm));
+  }
+}
+
+/* Diseño B (señalética de garita) — tokens móviles. Base 16 px (sin escala de raíz); solo <= 720 px, escritorio no cambia. */
+@media (max-width: 720px) {
+  :root {
+    --qv-text-xs: 13.5px;
+    --qv-text-sm: 14px;
+    --qv-text-md: 16px;
+
+    /* Texto secundario más oscuro (comp --mute) para leer al sol. */
+    --qv-text-secondary: #475569;
+    --qv-estado-reportando-texto: #15803d;
+
+    /* Borde grueso de la señalética (comp --line2). */
+    --qv-border-strong: #94a3b8;
+    --qv-border-width: 1.5px;
+    --qv-border-width-thick: 2px;
+
+    /* Escala de radios del comp: chip/botón 14, tarjeta 18, control chico 10. */
+    --qv-radius-sm: 10px;
+    --qv-radius-md: 14px;
+    --qv-radius-lg: 18px;
+
+    /* Tintes de estado y colores que el comp usa y el sistema no tenía. */
+    --qv-color-danger-soft: #fee2e2;
+    --qv-color-success-soft: #dcfce7;
+    --qv-color-whatsapp: #15803d;
+    --qv-plate-bg: #ffffff;
+    --qv-plate-ink: #0f172a;
+  }
+
+  body {
+    line-height: 1.45;
+  }
+}
+
+@media (max-width: 720px) and (prefers-color-scheme: dark) {
+  :root {
+    --qv-color-primary-soft: #2b3170;
+    --qv-color-primary-subtle: #1a1f47;
+    --qv-color-on-primary: #0b1020;
+    --qv-color-warning-soft: #3a2a0c;
+    --qv-text-secondary: #a5b2c6;
+    --qv-estado-reportando-texto: #86efac;
+    --qv-surface-soft: #18202f;
+    --qv-border-subtle: #263044;
+    --qv-border-strong: #64748b;
+    --qv-color-danger-soft: #3b1618;
+    --qv-color-success-soft: #123222;
+    --qv-color-whatsapp: #22a55b;
+    --qv-plate-bg: #f8fafc;
   }
 }
 
@@ -5567,7 +5615,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     justify-content: stretch;
   }
 
-  .qv-fila-acciones .qv-button {
+  /* Más específico que `.qv-table--stack td[data-label] button` (44 px), que lo pisaba y la raíz de 18 px lo ocultaba. */
+  .qv-fila-tabla .qv-fila-acciones .qv-button {
     width: 100%;
     min-height: 3rem;
     justify-content: center;

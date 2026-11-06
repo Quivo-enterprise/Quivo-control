@@ -228,9 +228,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(row).toHaveCSS('display', 'grid');
   });
 
-  test('inputs >= 16 px (iOS no hace zoom) y base 18 px', async () => {
+  test('inputs >= 16 px (iOS no hace zoom) y base 16 px', async () => {
     await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
-    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('18px');
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('16px');
     const input = page.locator('main input:visible').first();
     await expect(input).toBeVisible();
     const px = await input.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
