@@ -87,11 +87,12 @@ export async function calcularFilaPc(
 ): Promise<FilaDelPc> {
   const dia = diaStr(fecha);
   const filas = await tx.$queryRaw<(FilaCalculada & { ordenTs: Date; grupoId: string | null })[]>`
-    SELECT f.id, f."vehiculoId", v.placa, f."llegadaTs", f."ordenTs", g.id AS "grupoId"
+    SELECT f.id, f."vehiculoId", v.placa, f."llegadaTs", f."ordenTs", g.id AS "grupoId", c.nombre AS "conductorNombre"
     FROM fila_salida f
     JOIN vehiculos v ON v.id = f."vehiculoId"
     JOIN sesiones_operativas so ON so.id = f."sesionId" AND so.estado = 'activa'
       AND (so.id = ${sesionPropiaId} OR ${sesionesVisiblesSql(ahora, fecha)})
+    LEFT JOIN conductores c ON c.id = so."conductorId" AND c."sindicatoId" = so."sindicatoId"
     LEFT JOIN grupo_vehiculo_miembros m ON m."vehiculoId" = f."vehiculoId"
     LEFT JOIN grupos_vehiculo g ON g.id = m."grupoId" AND g.estado = 'activo'
     WHERE f."puntoControlId" = ${puntoControlId} AND f.estado = 'en_fila'

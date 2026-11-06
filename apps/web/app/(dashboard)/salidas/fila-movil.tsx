@@ -40,7 +40,6 @@ interface FilaMovilProps {
   cargando: boolean;
   error?: string;
   offsetMs: number;
-  conductores: Record<string, string>;
   internos: Record<string, string>;
   ocupado: boolean;
   progreso: (tipo: TipoAccion, id: string) => boolean;
@@ -53,7 +52,7 @@ interface FilaMovilProps {
 }
 
 /** Fila de salida del celular (comp B): lista propia en vez de la tabla apilada; escritorio sigue con `DataTable`. */
-export function FilaMovil({ items, cargando, error, offsetMs, conductores, internos, ocupado, progreso, pendienteId, onPedir: pedir, recientes, baseMin }: FilaMovilProps) {
+export function FilaMovil({ items, cargando, error, offsetMs, internos, ocupado, progreso, pendienteId, onPedir: pedir, recientes, baseMin }: FilaMovilProps) {
   const disparadores = useRef(new Map<string, HTMLButtonElement>());
   const titulo = useRef<HTMLHeadingElement>(null);
   const itemsRef = useRef(items);
@@ -103,7 +102,7 @@ export function FilaMovil({ items, cargando, error, offsetMs, conductores, inter
           {items.map((r, i) => {
             const primera = i === 0;
             const haciendo = (Object.keys(TEXTO_PROGRESO) as TipoAccion[]).find((t) => progreso(t, r.id));
-            const detalle = [internos[r.vehiculoId] && `Int. ${internos[r.vehiculoId]}`, conductores[r.vehiculoId]].filter(Boolean).join(' · ');
+            const detalle = [internos[r.vehiculoId] && `Int. ${internos[r.vehiculoId]}`, r.conductorNombre].filter(Boolean).join(' · ');
             return (
               <li key={r.id} className={`qv-fila-m__item${primera ? ' qv-fila-m__item--primera' : ''}`}>
                 <div className="qv-fila-m__fila">

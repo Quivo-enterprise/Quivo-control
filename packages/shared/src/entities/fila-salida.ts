@@ -139,6 +139,8 @@ export const FilaSalidaPanelItemSchema = z.object({
   id: uuidSchema,
   vehiculoId: uuidSchema,
   placa: z.string(),
+  /** Conductor de la sesión de la fila; opcional para compatibilidad con un API anterior. */
+  conductorNombre: z.string().nullable().optional(),
   posicion: z.number().int().positive(),
   llegadaTs: z.string(),
   etaTs: z.string(),

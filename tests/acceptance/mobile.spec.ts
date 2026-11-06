@@ -204,6 +204,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       posicion: n,
       llegadaTs: iso(-10),
       etaTs: iso(habilitado ? 0 : 3 * n),
+      conductorNombre: n === 1 ? 'Pérez Prueba Ana' : null,
       esperaMs: 0,
       estado: 'en_fila',
       habilitado,
@@ -227,15 +228,6 @@ test.describe('Panel móvil (Pixel 7)', () => {
       // 1: aún no habilitado (salida anticipada); 2: no habilitado; 3: habilitado (despacho directo desde el menú).
       items: [item(1, '1234ABC', false), item(2, '5678XYZ', false), item(3, '4321QWE', true)],
     });
-    // El conductor sale de /reportes/en-vivo/posiciones (la leen admin y operador); /reportes/jornadas es solo admin.
-    const posiciones = [
-      PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
-        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
-        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
-        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
-      }),
-    ];
     const respuestas: Record<string, unknown> = {
       '/v1/lineas': [
         {
@@ -256,7 +248,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
         },
       ],
       [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
-      '/v1/reportes/en-vivo/posiciones': posiciones,
+      '/v1/reportes/en-vivo/posiciones': [],
       '/v1/vehiculos': [],
       '/v1/grupos-vehiculo': [],
     };
@@ -317,7 +309,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(dialogo).toBeHidden();
       expect(puts).toBe(0);
 
-      // Fila: conductor por vehículo (posiciones en vivo), estado de la cola con su hora de salida, y Despachar solo en la primera, a todo el ancho y de 60 px.
+      // Fila: conductor (viene en la fila), estado de la cola con su hora de salida, y Despachar solo en la primera, a todo el ancho y de 60 px.
       await expect(page.getByText('Pérez Prueba Ana')).toBeVisible();
       await expect(page.locator('.qv-fila-m__estado').first()).toContainText('Sale ');
       await expect(page.locator('.qv-fila-m__estado').nth(2)).toContainText('En turno');
@@ -425,25 +417,17 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
     // Fila 1 con hora de salida ya vencida (cuenta en color de aviso) y no habilitada (Despachar pide confirmación).
     const item = (n: number, placa: string, eta: number) => ({
-      id: uuid(10 + n), vehiculoId: uuid(20 + n), placa, posicion: n, llegadaTs: iso(-10), etaTs: iso(eta),
+      id: uuid(10 + n), vehiculoId: uuid(20 + n), placa, posicion: n, llegadaTs: iso(-10), etaTs: iso(eta), conductorNombre: n === 1 ? 'Pérez Prueba Ana' : null,
       esperaMs: 0, estado: 'en_fila', habilitado: false, demorado: false, anticipada: false,
     });
     const todos = [item(1, '1234ABC', -2), item(2, '5678XYZ', 6), item(3, '4321QWE', 12)];
     let visibles = [...todos];
-    const posiciones = [
-      PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
-        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
-        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
-        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
-      }),
-    ];
     const respuestas: Record<string, unknown> = {
       '/v1/lineas': [{ id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null, colorTexto: null, nombreCorto: 'Expreso Tiquipaya Cercado Norte', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null }],
       [`/v1/lineas/${uuid(1)}/rutas`]: [{ id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null, geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] } }],
       [`/v1/rutas/${uuid(2)}/puntos-control`]: [{ id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50, obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8 }],
       [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
-      '/v1/reportes/en-vivo/posiciones': posiciones,
+      '/v1/reportes/en-vivo/posiciones': [],
       '/v1/vehiculos': [],
       '/v1/grupos-vehiculo': [],
     };
@@ -692,23 +676,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
     const fila = EstadoFilaSalidaPanelSchema.parse({
       puntoControlId: PC, baseMin: 8, servidorTs: ahora.toISOString(), salidasRecientes: [],
-      items: [{ id: uuid(11), vehiculoId: uuid(21), placa: '1234ABC', posicion: 1, llegadaTs: iso(-10), etaTs: iso(3), esperaMs: 0, estado: 'en_fila', habilitado: false, demorado: false, anticipada: false }],
+      items: [{ id: uuid(11), vehiculoId: uuid(21), placa: '1234ABC', posicion: 1, conductorNombre: 'Pérez Prueba Ana', llegadaTs: iso(-10), etaTs: iso(3), esperaMs: 0, estado: 'en_fila', habilitado: false, demorado: false, anticipada: false }],
     });
-    const posiciones = [
-      PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
-        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
-        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
-        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
-      }),
-    ];
     const respuestas: Record<string, unknown> = {
       '/v1/lineas': [{ id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null, colorTexto: null, nombreCorto: '120', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null }],
       [`/v1/lineas/${uuid(1)}/rutas`]: [{ id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null, geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] } }],
       [`/v1/rutas/${uuid(2)}/puntos-control`]: [{ id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50, obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8 }],
       [`/v1/salidas/${PC}/fila`]: fila,
       [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
-      '/v1/reportes/en-vivo/posiciones': posiciones,
+      '/v1/reportes/en-vivo/posiciones': [],
       '/v1/vehiculos': [],
     };
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };

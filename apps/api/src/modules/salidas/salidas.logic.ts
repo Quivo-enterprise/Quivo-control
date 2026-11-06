@@ -51,6 +51,8 @@ export interface FilaCalculada {
   vehiculoId: string;
   placa: string;
   llegadaTs: Date;
+  /** Conductor de la sesión de la fila. El LEFT JOIN (mismo `sindicatoId`) da null con datos inconsistentes en vez de descartar la fila. */
+  conductorNombre?: string | null;
 }
 
 export function armarEstadoMovil(
@@ -85,6 +87,7 @@ export function armarItemsPanel(
       id: p.id,
       vehiculoId: p.vehiculoId,
       placa: f.placa,
+      conductorNombre: f.conductorNombre ?? null,
       posicion: p.posicion,
       llegadaTs: f.llegadaTs.toISOString(),
       etaTs: p.etaTs.toISOString(),

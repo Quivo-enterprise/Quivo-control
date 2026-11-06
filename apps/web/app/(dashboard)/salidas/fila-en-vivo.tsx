@@ -5,14 +5,12 @@ import { Alert, Button, Card, ConfirmDialog, DataTable, PlateBadge, StatusBadge,
 import type { FilaSalidaPanelItem, SalidaRecientePanel } from '@quivo/shared';
 import { Clock3, History } from 'lucide-react';
 import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
-import { usePosicionesEnVivo } from '../../../src/lib/en-vivo/use-en-vivo';
 import { useEsMovil } from '../../../src/lib/use-es-movil';
 import {
   ESTADO_BADGE,
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
   TEXTO_PROGRESO,
-  conductorPorVehiculoEnVivo,
   estadoVisualFila,
   offsetServidorMs,
   type TipoAccion,
@@ -60,10 +58,6 @@ export function FilaEnVivo({
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [enCurso, setEnCurso] = useState<{ tipo: TipoAccion; id: string } | null>(null);
   const esMovil = useEsMovil();
-  // Conductor de cada trufi: posiciones en vivo (misma query que En vivo; las lee también `operador`, a diferencia
-  // de /reportes/jornadas, solo admin). Solo en el celular y sin el poll de 2 s del mapa: el nombre casi no cambia.
-  const posiciones = usePosicionesEnVivo(esMovil ? token : null, 30_000);
-  const conductores = useMemo(() => conductorPorVehiculoEnVivo(posiciones.data ?? []), [posiciones.data]);
 
   const data = fila.data;
   // `dataUpdatedAt` = cuándo llegó esta respuesta al navegador; con `servidorTs` da el desfase de reloj.
@@ -133,7 +127,6 @@ export function FilaEnVivo({
           cargando={fila.isPending}
           error={fila.isError && !data ? mensajeError(fila.error) : undefined}
           offsetMs={offsetMs}
-          conductores={conductores}
           internos={internoPorVehiculo}
           ocupado={ocupado}
           progreso={progreso}
