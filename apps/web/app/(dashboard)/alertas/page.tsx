@@ -327,13 +327,11 @@ export default function AlertasPage() {
       </div>
 
       {/* `/reglas` no es de todos los roles: sin acceso, el conteo queda como texto. */}
-      {isRouteAllowedForRole(NAV_ITEMS, '/reglas', user?.rol ?? '') ? (
+      {isRouteAllowedForRole(NAV_ITEMS, '/reglas', user?.rol ?? '') && (
         <Link href="/reglas" className="qv-alertas__link">
           {textoSanciones}
           <ChevronRight size={20} aria-hidden="true" />
         </Link>
-      ) : (
-        <div className="qv-alertas__link">{textoSanciones}</div>
       )}
 
       {alertas.isError && alertas.data && (

@@ -16,16 +16,18 @@ import { ConductoresService } from './conductores.service.js';
 class CrearConductorDto extends createZodDto(CrearConductorSchema) {}
 class ActualizarConductorDto extends createZodDto(ActualizarConductorSchema) {}
 
+const ROLES_CONDUCTORES = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
+
 /** RF-15..19 — CRUD de conductores por sindicato (QUI-223). */
 @Controller('conductores')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato', 'operador')
+@Roles(...ROLES_CONDUCTORES)
 export class ConductoresController {
   constructor(@Inject(ConductoresService) private readonly conductoresService: ConductoresService) {}
 
-  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
-  @Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
+  @Roles(...ROLES_CONDUCTORES, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.conductoresService.listar(actor);
   }

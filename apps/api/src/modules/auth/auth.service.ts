@@ -253,7 +253,7 @@ export class AuthService {
     actor: AuthenticatedUser,
     { email, newPassword }: AdminResetPasswordRequest,
   ): Promise<void> {
-    const usuario = await prisma.user.findUnique({ where: { email } });
+    const usuario = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
     }
@@ -307,31 +307,38 @@ export class AuthService {
   ): Promise<UsuarioAdministrativo> {
     const emailNormalizado = email.toLowerCase();
     const tenant = { rol: actor.rol, sindicatoId: actor.sindicatoId };
-    // `sindicatos` tiene RLS: se lee con el contexto del actor (admin_quivo ve todos).
-    const sindicato = await withTenantContext(tenant, (tx) =>
-      tx.sindicato.findUnique({ where: { id: sindicatoId }, select: { id: true } }),
-    );
-    if (!sindicato) {
-      throw new NotFoundException('Sindicato no encontrado');
-    }
-    if (await prisma.user.findUnique({ where: { email: emailNormalizado } })) {
-      throw new ConflictException('Ya existe un usuario con ese email');
-    }
-
     const hashed = await hashPassword(password);
     const id = randomUUID();
-    let usuario: UsuarioAdministrativo;
     try {
-      usuario = (await prisma.$transaction(async (tx) => {
-        const creado = await tx.user.create({
+      // Una sola transacción: sin auditoría no queda credencial viva. `user`/`account` no tienen RLS;
+      // `sindicatos` y `audit_log` sí, por eso el contexto del actor (admin_quivo ve todos).
+      return await withTenantContext(tenant, async (tx) => {
+        const sindicato = await tx.sindicato.findUnique({ where: { id: sindicatoId }, select: { id: true } });
+        if (!sindicato) {
+          throw new NotFoundException('Sindicato no encontrado');
+        }
+        if (await tx.user.findUnique({ where: { email: emailNormalizado } })) {
+          throw new ConflictException('Ya existe un usuario con ese email');
+        }
+        const usuario = (await tx.user.create({
           data: { id, name, email: emailNormalizado, rol, sindicatoId },
           select: { id: true, name: true, email: true, rol: true, sindicatoId: true },
-        });
+        })) as UsuarioAdministrativo;
         await tx.account.create({
           data: { id: randomUUID(), accountId: id, providerId: 'credential', userId: id, password: hashed },
         });
-        return creado;
-      })) as UsuarioAdministrativo;
+        await tx.auditLog.create({
+          data: {
+            sindicatoId,
+            usuarioId: actor.userId,
+            entidad: 'usuario',
+            entidadId: usuario.id,
+            accion: 'crear',
+            diff: { email: usuario.email, rol, sindicatoId },
+          },
+        });
+        return usuario;
+      });
     } catch (error) {
       // Carrera con otro alta del mismo email: el unique de `user.email` manda.
       if ((error as { code?: string }).code === 'P2002') {
@@ -339,20 +346,6 @@ export class AuthService {
       }
       throw error;
     }
-
-    await withTenantContext(tenant, (tx) =>
-      tx.auditLog.create({
-        data: {
-          sindicatoId,
-          usuarioId: actor.userId,
-          entidad: 'usuario',
-          entidadId: usuario.id,
-          accion: 'crear',
-          diff: { email: usuario.email, rol, sindicatoId },
-        },
-      }),
-    );
-    return usuario;
   }
 
   /** El token corto (`jwt` plugin) requiere una sesión válida — se la pasamos vía Bearer (plugin `bearer`, no hay cookies server-to-server). */

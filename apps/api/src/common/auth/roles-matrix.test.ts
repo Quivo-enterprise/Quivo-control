@@ -128,7 +128,6 @@ describe('Rol delegado: permitido solo en lo que usan sus cuatro pantallas', () 
     ['SalidasPanelController', SalidasPanelController, 'moverAlFinal'],
     ['SalidasPanelController', SalidasPanelController, 'retirar'],
     ['SalidasPanelController', SalidasPanelController, 'fijarBase'],
-    ['GruposVehiculoController', GruposVehiculoController, 'crear'],
   ])('%s.%s: lo deja pasar', (_n, controller, metodo) => {
     expect(permitido(controller, metodo)).toBe(true);
   });
@@ -160,11 +159,24 @@ describe('Rol delegado: permitido solo en lo que usan sus cuatro pantallas', () 
     ['SindicatosController', SindicatosController, 'listar'],
     ['SyncErroresController', SyncErroresController, 'listar'],
     ['CredencialesMovilesController', CredencialesMovilesController, 'generarPinVehiculo'],
+    // Grupos: SOLO admins (decisión del CTO, 20/10).
+    ['GruposVehiculoController', GruposVehiculoController, 'listar'],
+    ['GruposVehiculoController', GruposVehiculoController, 'crear'],
     ['AuthController', AuthController, 'listarUsuarios'],
     ['AuthController', AuthController, 'crearUsuario'],
     ['AuthController', AuthController, 'resetPasswordComoAdmin'],
   ])('%s.%s: 403', (_n, controller, metodo) => {
     expect(() => permitido(controller, metodo)).toThrow(ForbiddenException);
+  });
+
+  // El `@Roles` de método pisa al de clase (copia literal): si cambia el de clase, el listado no lo sigue solo.
+  it.each([
+    LineasController, VehiculosController, ConductoresController, LineaRutasController,
+    RutaVariantesController, RutaControlPointsController, ReglasController, SancionesController,
+  ].map((c) => [c.name, c] as const))('%s.listar: roles de clase + delegado', (_n, controller) => {
+    const deClase = Reflect.getMetadata(ROLES_KEY, controller) as string[];
+    const deMetodo = Reflect.getMetadata(ROLES_KEY, controller.prototype.listar) as string[];
+    expect([...deMetodo].sort()).toEqual([...deClase, 'delegado'].sort());
   });
 
   it('el operador sigue sin leer reglas ni sanciones, y sin atender infracciones', () => {

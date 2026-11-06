@@ -25,9 +25,9 @@ const ROLES_VARIANTES = ['admin_quivo', 'admin_sindicato', 'operador'] as const;
 export class RutaVariantesController {
   constructor(@Inject(VariantesService) private readonly variantesService: VariantesService) {}
 
-  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
+  // `delegado`: solo este listado (lo usan Hoy, En vivo, Alertas y Salidas).
   @Get()
-  @Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
+  @Roles(...ROLES_VARIANTES, 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser, @Param('rutaId') rutaId: string) {
     return this.variantesService.listarPorRuta(actor, rutaId);
   }
