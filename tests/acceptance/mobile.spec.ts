@@ -269,7 +269,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await tabbar.getByRole('button', { name: 'Más' }).click();
     await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeVisible();
     await page.keyboard.press('Escape');
-    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(132); // 2 filas: 114 px a 16 px de base, ~128 px con la base de 18 px móvil
+    expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(120); // 2 filas: ~112 px medidos a 412 px con base de 16 px
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
     const flota = page.getByRole('button', { name: 'Flota', exact: true });

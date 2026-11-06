@@ -5417,30 +5417,19 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 /* Diseño B (señalética de garita) — tokens móviles. Base 16 px (sin escala de raíz); solo <= 720 px, escritorio no cambia. */
 @media (max-width: 720px) {
   :root {
-    --qv-text-xs: 13.5px;
-    --qv-text-sm: 14px;
-    --qv-text-md: 16px;
+    /* rem para respetar el tamaño de fuente del navegador del usuario. */
+    --qv-text-xs: 0.84375rem;
 
     /* Texto secundario más oscuro (comp --mute) para leer al sol. */
     --qv-text-secondary: #475569;
-    --qv-estado-reportando-texto: #15803d;
 
     /* Borde grueso de la señalética (comp --line2). */
     --qv-border-strong: #94a3b8;
-    --qv-border-width: 1.5px;
-    --qv-border-width-thick: 2px;
 
     /* Escala de radios del comp: chip/botón 14, tarjeta 18, control chico 10. */
     --qv-radius-sm: 10px;
     --qv-radius-md: 14px;
     --qv-radius-lg: 18px;
-
-    /* Tintes de estado y colores que el comp usa y el sistema no tenía. */
-    --qv-color-danger-soft: #fee2e2;
-    --qv-color-success-soft: #dcfce7;
-    --qv-color-whatsapp: #15803d;
-    --qv-plate-bg: #ffffff;
-    --qv-plate-ink: #0f172a;
   }
 
   body {
@@ -5450,19 +5439,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 @media (max-width: 720px) and (prefers-color-scheme: dark) {
   :root {
-    --qv-color-primary-soft: #2b3170;
-    --qv-color-primary-subtle: #1a1f47;
-    --qv-color-on-primary: #0b1020;
-    --qv-color-warning-soft: #3a2a0c;
     --qv-text-secondary: #a5b2c6;
-    --qv-estado-reportando-texto: #86efac;
-    --qv-surface-soft: #18202f;
-    --qv-border-subtle: #263044;
     --qv-border-strong: #64748b;
-    --qv-color-danger-soft: #3b1618;
-    --qv-color-success-soft: #123222;
-    --qv-color-whatsapp: #22a55b;
-    --qv-plate-bg: #f8fafc;
   }
 }
 
@@ -5615,7 +5593,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     justify-content: stretch;
   }
 
-  /* Más específico que `.qv-table--stack td[data-label] button` (44 px), que lo pisaba y la raíz de 18 px lo ocultaba. */
+  /* `.qv-table--stack td[data-label] button` (min-height 2.75rem) ganaba la cascada y la regla de 3rem nunca aplicó; con raíz de 18 px 2.75rem eran 49.5 px y pasaba el check de 48 px. */
   .qv-fila-tabla .qv-fila-acciones .qv-button {
     width: 100%;
     min-height: 3rem;
