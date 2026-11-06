@@ -91,7 +91,7 @@ export function fechaHoy(ahora: Date = new Date()): string {
 }
 
 /** Forma del `StatusBadge` por estado: círculo ok, rombo aviso, cuadrado falla, hueco neutro. */
-const INSIGNIA: Record<EstadoFrescura, StatusBadgeStatus> = {
+export const INSIGNIA: Record<EstadoFrescura, StatusBadgeStatus> = {
   reportando: 'active',
   detenido: 'idle',
   en_pausa: 'warning',
@@ -100,6 +100,11 @@ const INSIGNIA: Record<EstadoFrescura, StatusBadgeStatus> = {
   inactivo: 'inactive',
   sin_datos: 'inactive',
 };
+
+/** Velocidad para mostrar junto al estado: solo con el vehículo reportando (parado o sin señal, el último valor engaña). */
+export function kmhSiReportando(estado: EstadoFrescura, kmh: number | null): number | null {
+  return estado === 'reportando' ? kmh : null;
+}
 
 /** Sesión de hoy del vehículo; con varias (dos teléfonos) gana la del último fix. */
 export function posicionDeVehiculo(posiciones: readonly PosicionEnVivo[], vehiculoId: string): PosicionEnVivo | undefined {
@@ -134,7 +139,7 @@ export function estadoVehiculoHoy(p: PosicionEnVivo): EstadoVehiculoHoy {
   return {
     insignia: INSIGNIA[estado],
     etiqueta: presentacionFrescura(estado).etiqueta,
-    kmh: estado === 'reportando' ? velocidadKmh(p.speed) : null,
+    kmh: kmhSiReportando(estado, velocidadKmh(p.speed)),
     vuelta: p.vuelta?.numero ?? null,
     linea: p.lineaNombre,
   };
