@@ -165,6 +165,18 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - **Deploy r39 (6/11, ~04:40 hora Bolivia, completo).** API `quivo-api-00057-b4r`, web `quivo-web-00027-sjs`, worker desplegado, imagen `r39-20261106` desde `d80fb89`. Migraciones ok (no había nuevas), `/v1/health/ready` ok.
     - Rollback: web `quivo-web-00026-hdk` (r38), API `quivo-api-00055-rf7` (imagen r37).
     - Verificado en prod (Playwright, Pixel 7, admin_quivo): Hoy, En vivo, Salidas, Alertas y Más con pestañas, overflow 0; `/salidas/:pc/fila` responde 200 con la query nueva (0 trufis en fila a esa hora, así que no se vio el nombre). Sin errores de consola salvo el aviso de WebGL del navegador headless.
+  - **Asignaciones del 6/11 (prod, pedidas por el CTO a las 05:55 hora Bolivia, con los choferes esperando para salir).**
+    - **Causa:** `piloto-linea-16` tenía asignaciones hasta el 5/11. Sin asignación de hoy el login móvil responde 409 ("sin rotación publicada"); así fallaba 4745HGH.
+    - **Hecho:** rotación nueva `linea-16-20261106`, publicada, solo para el 6/11: 41 autos, turno mañana, ruta de la Línea 16. Una rotación nueva no corta el login de nadie, a diferencia de anular `piloto-linea-16`.
+    - **Error corregido:** la primera carga tomó conductores de fechas futuras de `sdasd` (reparto al azar) y dejó 38 de 41 pares mal unos minutos. Se corrigieron contra la última asignación hasta el 5/11; verificado por la API (0 pares mal).
+    - **Verificado:** login 200 a las 10:00:27Z y sesión de 4745HGH visible en `/reportes/en-vivo/posiciones`. El resto de los choferes no se había visto entrar al escribir esto.
+    - **Trampa del script:** `crear-piloto-linea-16.ts` aborta si otra rotación tiene asignaciones de esos vehículos en el rango. Con `sdasd` publicada no sirve hasta resolverla. Y para copiar pares vehículo-conductor nunca usar "la última asignación" sin tope de fecha.
+    - **Pendiente, decisión del CTO:**
+      - `sdasd` (creada y publicada desde el panel el 6/11) tiene asignaciones hasta el 10/11 con conductores al azar. Esos autos fallan con su chofer habitual esos días, y ocupa el cupo vehículo-fecha-turno.
+      - 1616PIG no entró en la rotación nueva: tiene mañana en `sdasd` con otro conductor, así que su chofer habitual no entra hoy.
+      - Autos de prueba 9001TST, 9002TST, 9004TST, 9005TST y 9006TST quedaron en la rotación por el pedido de "todos los autos". No afectan a los choferes reales: el login filtra por vehículo y conductor. Sacarlos exige anular la rotación, con login caído unos segundos: no se hizo con los choferes saliendo.
+      - **Desde el 7/11 no hay asignaciones de la Línea 16 fuera de `sdasd`:** hace falta una rotación por día o extender el rango.
+    - **Delegado (admin_sindicato) sigue sin probarse con su cuenta:** no hay credenciales suyas en esta máquina. Hay 1 solo sindicato y En vivo filtra solo por sindicato, así que debería ver lo mismo que admin_quivo.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
