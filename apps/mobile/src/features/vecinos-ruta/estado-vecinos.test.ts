@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UMBRAL_VECINO_FRESCO_MS, type VecinoRuta } from '@quivo/shared';
+import { UMBRAL_VECINO_RUTA_FRESCO_MS, type VecinoRuta } from '@quivo/shared';
 import {
   decidirAlertaVecino,
   estadoDistanciaVecino,
@@ -30,7 +30,7 @@ describe('vecinoVisible', () => {
   it('oculta null', () => expect(vecinoVisible(null)).toBe(false));
   it('muestra un fix fresco', () => expect(vecinoVisible(vecino)).toBe(true));
   it('muestra justo en el umbral y oculta pasado', () => {
-    const limite = { ...vecino, edadFixS: UMBRAL_VECINO_FRESCO_MS / 1000 };
+    const limite = { ...vecino, edadFixS: UMBRAL_VECINO_RUTA_FRESCO_MS / 1000 };
     expect(vecinoVisible(limite)).toBe(true);
     expect(vecinoVisible({ ...limite, edadFixS: limite.edadFixS + 1 })).toBe(false);
   });
@@ -78,10 +78,10 @@ describe('estadoFila', () => {
   });
   it('null con respuesta fresca es nadie', () => {
     expect(estadoFila(null, 0)).toEqual({ tipo: 'nadie' });
-    expect(estadoFila(null, UMBRAL_VECINO_FRESCO_MS)).toEqual({ tipo: 'nadie' });
+    expect(estadoFila(null, UMBRAL_VECINO_RUTA_FRESCO_MS)).toEqual({ tipo: 'nadie' });
   });
   it('null con respuesta vencida es sinDato', () => {
-    expect(estadoFila(null, UMBRAL_VECINO_FRESCO_MS + 1)).toEqual({ tipo: 'sinDato' });
+    expect(estadoFila(null, UMBRAL_VECINO_RUTA_FRESCO_MS + 1)).toEqual({ tipo: 'sinDato' });
   });
 });
 
