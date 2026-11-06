@@ -107,6 +107,17 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(tabbar.locator('[aria-current="page"]')).toHaveCount(1);
   });
 
+  test('Más: en modo oscuro el nombre de usuario no cae al negro del navegador', async () => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    try {
+      await page.goto('/mas', { waitUntil: 'networkidle', timeout: 60_000 });
+      const color = await page.locator('.qv-mas-user__name').evaluate((el) => getComputedStyle(el).color);
+      expect(color).not.toBe('rgb(0, 0, 0)');
+    } finally {
+      await page.emulateMedia({ colorScheme: 'light' });
+    }
+  });
+
   test('vehículos: el botón flotante no tapa las acciones de la última fila', async () => {
     await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
     const historial = page.getByRole('button', { name: /^Ver historial de / }).last();

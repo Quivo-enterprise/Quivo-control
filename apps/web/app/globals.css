@@ -29,6 +29,7 @@ body::-webkit-scrollbar {
 
 body {
   font-family: var(--qv-font-body);
+  color: var(--qv-text-primary);
 }
 
 /* Animación del punto pulsante "En vivo" */
@@ -2449,6 +2450,7 @@ body {
   border: 0.11rem solid;
   border-radius: 0.12rem;
   background: #fff;
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   box-shadow:
     0 0.45rem 0.75rem rgb(15 23 42 / 15%),
     inset 0 0 0 0.15rem #f8fafc;
@@ -2620,6 +2622,7 @@ body {
 
 .line-box-preview__cartel {
   background: #fffef9;
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   border: 0.18rem solid;
   border-bottom-width: 0.28rem;
   border-radius: 0.45rem;
