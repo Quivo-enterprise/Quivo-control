@@ -153,39 +153,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     refrescandoRef.current = true;
+    // Recién acá (pasado el guard) se cancela el timer: si ya hay un refresh en vuelo, un
+    // reintento pendiente no se debe perder.
+    clearScheduledRefresh();
     try {
       await conLockEntrePestanias(async () => {
         // Se relee el storage ya dentro del lock: otra pestaña pudo rotar la sesión mientras
         // esperábamos, y mandar el refresh token viejo es lo que provocaba los 401 en cascada.
-        const stored = leerSesionGuardada();
-        if (
-          !sessionRef.current.refreshToken ||
-          !stored?.user ||
-          !stored.token ||
-          !stored.refreshToken
-        ) {
-          return; // sin sesión local, o cerrada en otra pestaña (el listener de `storage` lo replica)
+        if (!sessionRef.current.refreshToken) {
+          return; // sin sesión local, o cerrada en otra pestaña (el listener de `storage` la vació)
         }
-        if (!necesitaRefresh(stored.token)) {
-          persistSession(stored.user, stored.token, stored.refreshToken);
-          scheduleRefreshRef.current(stored.token);
+        const guardada = leerSesionGuardada();
+        const actual = sessionRef.current;
+        // Storage vacío o corrupto pero la sesión en memoria está completa (limpiado en esta
+        // misma pestaña, que no recibe su propio evento `storage`): se refresca desde memoria.
+        const base =
+          guardada?.user && guardada.token && guardada.refreshToken
+            ? guardada
+            : actual.user && actual.token
+              ? actual
+              : null;
+        if (!base?.user || !base.token || !base.refreshToken) {
+          return;
+        }
+        const { user, token, refreshToken: enviado } = base;
+        // Alinea la memoria con lo que se va a enviar (storage puede ir por delante si otra
+        // pestaña rotó mientras esperábamos el lock): la comparación de abajo es contra esto.
+        sessionRef.current = { user, token, refreshToken: enviado };
+        if (!necesitaRefresh(token)) {
+          persistSession(user, token, enviado);
+          scheduleRefreshRef.current(token);
           return;
         }
         try {
-          const response = await refreshRequest(stored.refreshToken);
-          if (!sessionRef.current.user) {
-            return; // se cerró sesión mientras el request estaba en vuelo: no resucitarla
+          const response = await refreshRequest(enviado);
+          if (sessionRef.current.refreshToken !== enviado) {
+            // Logout, otro login o rotación de otra pestaña durante el request: no pisar.
+            return;
           }
-          retryAttemptRef.current = 0;
-          persistSession(stored.user, response.accessToken, response.refreshToken);
+          persistSession(user, response.accessToken, response.refreshToken);
           scheduleRefreshRef.current(response.accessToken);
         } catch (error) {
-          if (!sessionRef.current.user) {
+          if (sessionRef.current.refreshToken !== enviado) {
             return;
           }
           const status = error instanceof RefreshHttpError ? error.status : null;
           if (decidirTrasFalloRefresh(status) === 'logout') {
-            // 401 real: la API rechazó el refresh token, no hay forma de renovar.
+            // 4xx definitivo: la API rechazó el refresh token, no hay forma de renovar.
             clearSession();
             return;
           }
@@ -205,6 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const scheduleRefresh = useCallback(
     (token: string) => {
       clearScheduledRefresh();
+      retryAttemptRef.current = 0; // todo reagendado que no es un reintento corta la racha
       const expiryMs = getJwtExpiryMs(token);
       if (expiryMs === null) {
         return; // token opaco (ej. bypass de desarrollo) — no se puede programar
@@ -242,9 +257,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { user: AuthUser; token: string; refreshToken?: string };
+    const parsed = leerSesionGuardada();
+    if (parsed?.user && parsed.token) {
       const refreshTokenValue = parsed.refreshToken ?? null;
       sessionRef.current = {
         user: parsed.user,
@@ -343,7 +357,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!token || !refreshToken || (!forzar && !necesitaRefresh(token))) {
         return;
       }
-      clearScheduledRefresh();
       void performRefreshRef.current();
     }
     const alVolverVisible = () => {

@@ -127,6 +127,8 @@ export function resolveJwtSecret(): string {
   return jwtSecret;
 }
 
+export const SESSION_TTL_SECONDS = parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '30d');
+
 /**
  * Instancia única de Better-Auth (doc técnico §5, QUI-219: "no construir auth a mano").
  * Vive acá (no en apps/api) porque tanto el seed (`prisma/seed.ts`, en este mismo
@@ -145,8 +147,6 @@ export function resolveJwtSecret(): string {
  *   registra `login`/`refresh`) — el control de acceso real es "no existe la ruta", no
  *   este flag. Dejarlo en `true` también bloquearía el `signUpEmail` que usa el seed.
  */
-export const SESSION_TTL_SECONDS = parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '30d');
-
 export const auth = betterAuth({
   secret: resolveJwtSecret(),
   database: prismaAdapter(prisma, { provider: 'postgresql' }),

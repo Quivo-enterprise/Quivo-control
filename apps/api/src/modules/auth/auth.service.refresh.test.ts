@@ -22,8 +22,18 @@ vi.mock('@quivo/db', () => {
     withTenantContext: vi.fn(),
     auth: {
       api: {
-        getSession: async ({ headers }: { headers: Headers }) => {
+        getSession: async ({
+          headers,
+          query,
+        }: {
+          headers: Headers;
+          query?: { disableRefresh?: boolean };
+        }) => {
           const fila = [...filas.values()].find((f) => f.token === bearer(headers));
+          // Better Auth sube updatedAt de una sesión ociosa al leerla, salvo disableRefresh.
+          if (fila && !query?.disableRefresh && Date.now() - fila.updatedAt.getTime() > 86400_000) {
+            fila.updatedAt = new Date();
+          }
           return fila ? { session: { ...fila }, user: { id: fila.userId } } : null;
         },
         getToken: async ({ headers }: { headers: Headers }) => ({
@@ -125,6 +135,16 @@ describe('AuthService.refresh (revocación por sesión y ventana de gracia)', ()
     );
     expect(filas.has('s1')).toBe(false);
     expect(filas.has('s2')).toBe(true);
+  });
+
+  it('token una rotación atrás reenviado tras un día ocioso: 401 y revoca (getSession no renueva updatedAt)', async () => {
+    const r1 = await servicio.refresh({ refreshToken: 'token-inicial-1' });
+    vi.advanceTimersByTime(2 * 86400_000);
+    await expect(servicio.refresh({ refreshToken: 'token-inicial-1' })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(filas.has('s1')).toBe(false);
+    expect(r1.refreshToken).toBeDefined();
   });
 
   it('pierde el CAS y el token vigente no es el siguiente esperado: 401 y revoca solo esa sesión', async () => {

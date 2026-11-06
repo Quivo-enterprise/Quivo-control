@@ -26,18 +26,30 @@ export class RefreshHttpError extends Error {
   }
 }
 
+const REFRESH_TIMEOUT_MS = 15_000;
+
 export async function refreshRequest(refreshToken: string): Promise<RefreshResponse> {
-  const response = await fetch(`${API_URL}/v1/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken }),
-  });
+  // AbortController + setTimeout (no `AbortSignal.timeout`, que Chrome < 103 no tiene): un request
+  // colgado dejaría `refrescandoRef` en true y la cadena de refresh muerta. El abort lanza
+  // `AbortError` (sin `status`), que la política trata como fallo de red y reintenta.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${API_URL}/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    throw new RefreshHttpError(response.status);
+    if (!response.ok) {
+      throw new RefreshHttpError(response.status);
+    }
+
+    return (await response.json()) as RefreshResponse;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return (await response.json()) as RefreshResponse;
 }
 
 /** QUI-251 — revoca la sesión server-side al cerrar sesión (antes solo se borraba el

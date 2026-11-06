@@ -205,7 +205,13 @@ export class AuthService {
   private async resolverSesionConTolerancia(tokenPresentado: string) {
     let candidato = tokenPresentado;
     for (let intento = 0; intento <= MAX_ROTACIONES_A_TOLERAR; intento++) {
-      const session = await auth.api.getSession({ headers: this.bearerHeaders(candidato) });
+      // `disableRefresh`: sin él, Better Auth sube `updatedAt`/`expiresAt` de una sesión ociosa al
+      // leerla, y `updatedAt` es lo que lee la ventana de gracia de `refresh()`: un token una
+      // rotación atrás, reenviado tras un día inactivo, pasaría por "recién rotado".
+      const session = await auth.api.getSession({
+        headers: this.bearerHeaders(candidato),
+        query: { disableRefresh: true },
+      });
       if (session) {
         return { session, rotacionesAtras: intento };
       }

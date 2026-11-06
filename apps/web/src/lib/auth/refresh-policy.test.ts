@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { decidirTrasFalloRefresh, retryDelayMs } from './refresh-policy';
 
 describe('decidirTrasFalloRefresh', () => {
-  it('401 cierra sesión', () => {
-    expect(decidirTrasFalloRefresh(401)).toBe('logout');
+  it.each([400, 401, 403, 404, 422])('status %s (4xx definitivo) cierra sesión', (status) => {
+    expect(decidirTrasFalloRefresh(status)).toBe('logout');
   });
 
-  it.each([null, 500, 502, 503, 429, 403])('status %s conserva la sesión y reintenta', (status) => {
+  it.each([null, 408, 429, 500, 502, 503])('status %s conserva la sesión y reintenta', (status) => {
     expect(decidirTrasFalloRefresh(status)).toBe('retry');
   });
 });

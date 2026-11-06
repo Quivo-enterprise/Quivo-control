@@ -1,9 +1,13 @@
 /** Qué hacer cuando `POST /v1/auth/refresh` falla. `status` es el HTTP status de la API, o
- * `null` si no hubo respuesta (error de red, offline, timeout). Solo un 401 real significa que
- * la sesión murió; red caída, 5xx o cualquier otro status son transitorios: se conserva la
- * sesión y se reintenta. */
+ * `null` si no hubo respuesta (error de red, offline, timeout). Un 4xx es definitivo (el
+ * request o el token no van a mejorar solos: 401 sesión muerta, 400/403/404 el mismo token
+ * muerto reenviado en loop) salvo 408 y 429, que son transitorios. Sin respuesta, 5xx, 408 y
+ * 429: se conserva la sesión y se reintenta. */
 export function decidirTrasFalloRefresh(status: number | null): 'logout' | 'retry' {
-  return status === 401 ? 'logout' : 'retry';
+  if (status === null || status === 408 || status === 429) {
+    return 'retry';
+  }
+  return status >= 400 && status < 500 ? 'logout' : 'retry';
 }
 
 const RETRY_DELAYS_MS = [5_000, 15_000, 30_000] as const;
