@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { colorTextoContraste, MOBILE_QUERY, PlateBadge, StatusBadge } from '@quivo/design-system';
+import { colorTextoContraste, PlateBadge, StatusBadge } from '@quivo/design-system';
 import { formatearTelefonoBolivia } from '@quivo/shared';
 import {
   Bus,
@@ -236,11 +236,9 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   const lista = ordenarInfracciones(infracciones.data ?? []);
   const abiertas = lista.filter((i) => i.estado === 'abierta');
   // Sin datos (cargando o con error) "0 abiertas" sería falso: texto neutro.
-  const textoAlertas = infracciones.data
-    ? `${abiertas.length} abierta${abiertas.length === 1 ? '' : 's'}`
-    : infracciones.isError
-      ? 'Sin cargar'
-      : 'Cargando…';
+  const nAbiertas = `${abiertas.length} abierta${abiertas.length === 1 ? '' : 's'}`;
+  // Cargando solo mientras de verdad carga: con la consulta deshabilitada (sin sesión/token) no hay dato ni carga.
+  const textoAlertas = infracciones.data ? nAbiertas : infracciones.isLoading ? 'Cargando…' : 'Sin cargar';
   const vueltaHoy = posicion?.vuelta;
   const textoHoy = vueltaHoy
     ? `Vuelta ${vueltaHoy.numero} · ${vueltaHoy.varianteNombre ?? (vueltaHoy.varianteId ? 'Molinos' : 'Directo')}`
@@ -318,7 +316,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   // "Ver en mapa" pliega la hoja ANTES de que la página mida dónde cae el punto (flushSync: el
   // layout ya está aplicado cuando `onVerEnMapa` lee la altura de la hoja).
   function verEnMapa(inf: Infraccion) {
-    if (window.matchMedia(MOBILE_QUERY).matches) {
+    if (esMovil) {
       flushSync(() => setHojaPlegada(true));
       // El botón "Ver en mapa" queda oculto al plegar: el foco pasa al asa en vez de perderse.
       asaRef.current?.focus({ preventScroll: true });
@@ -432,7 +430,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       {esMovil && (
         <div className="qv-live-panel__m">
           <div className="qv-live-panel__m-top">
-            <h2 ref={tituloRef} tabIndex={-1} aria-label={placa} className="qv-live-panel__placa qv-live-panel__placa--m">
+            <h2 ref={tituloRef} tabIndex={-1} aria-label={placa || undefined} className="qv-live-panel__placa qv-live-panel__placa--m">
+              {!placa && <span className="qv-visually-hidden">Vehículo</span>}
               <PlateBadge plate={placa} size="lg" />
             </h2>
             {lineaNombre && <span className="qv-live-panel__m-tag">{lineaNombre}</span>}
@@ -494,7 +493,6 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
       )}
 
       {!esMovil && (
-        <>
         <div className="qv-live-panel__cabecera">
           <span className="qv-live-panel__avatar" aria-hidden="true">
             {fotoUrl && fotoRota !== fotoUrl ? (
@@ -527,7 +525,6 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        </>
       )}
 
       <div id="qv-live-panel-cuerpo" className="qv-live-panel__cuerpo">
@@ -589,7 +586,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         <h3 className="qv-live-panel__h">
           <span>Infracciones</span>
           <span className="qv-live-panel__tabular">
-            {abiertas.length > 0 ? `${abiertas.length} abierta${abiertas.length === 1 ? '' : 's'}` : 'ninguna abierta'}
+            {abiertas.length > 0 ? nAbiertas : 'ninguna abierta'}
           </span>
         </h3>
         {infracciones.isPending ? (

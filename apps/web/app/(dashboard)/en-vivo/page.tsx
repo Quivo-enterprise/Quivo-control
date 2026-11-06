@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Alert, Button, ConfirmDialog, Loader, RouteMap, type MapPoint } from '@quivo/design-system';
+import { Alert, Button, ConfirmDialog, Loader, MOBILE_QUERY, RouteMap, type MapPoint } from '@quivo/design-system';
 import { AlertTriangle, CheckCircle2, Clock, Maximize2, Navigation, Radio, RefreshCw } from 'lucide-react';
 import { etiquetaTipoInfraccion, type EstadoFrescura, type GravedadRegla, type Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
@@ -473,7 +473,7 @@ function EnVivoContenido() {
     const hud = document.querySelector<HTMLElement>('.qv-live-barra, .qv-chips-mapa');
     const mapa = mapaRef.current?.querySelector<HTMLElement>('.qv-live-mapa');
     let offsetY = 0;
-    if (hoja && mapa && window.matchMedia('(max-width: 720px)').matches) {
+    if (hoja && mapa && window.matchMedia(MOBILE_QUERY).matches) {
       const caja = mapa.getBoundingClientRect();
       const arriba = Math.max(hud ? hud.getBoundingClientRect().bottom : caja.top, caja.top);
       const abajo = hoja.getBoundingClientRect().top;
@@ -541,7 +541,7 @@ function EnVivoContenido() {
     const medir = () => {
       const caja = mapa.getBoundingClientRect();
       const panel = sesionSeleccionada ? raiz.querySelector<HTMLElement>('.qv-live-cajon .qv-live-panel') : null;
-      const movil = window.matchMedia('(max-width: 720px)').matches;
+      const movil = window.matchMedia(MOBILE_QUERY).matches;
       const cajaPanel = panel?.getBoundingClientRect();
       // Oculto (display:none, p. ej. con Flota abierta) mide 0x0: no tapa nada.
       const tapa = cajaPanel !== undefined && cajaPanel.width > 0 && cajaPanel.height > 0 && cajaPanel.left < caja.right - 1;

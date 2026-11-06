@@ -4804,8 +4804,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     width: 2.75rem;
     height: 2.75rem;
   }
-  /* Hoja del diseño B: cerrar = cuadrado con borde de 48 px (comp .btn.ghost.sq). */
+  /* Hoja del diseño B: cerrar = cuadrado con borde de 48 px (comp .btn.ghost.sq), arriba a la derecha. */
   .qv-live-panel__m-top .qv-live-panel__cerrar {
+    position: absolute;
+    top: 0;
+    right: 0;
     width: 48px;
     height: 48px;
     border: 1.5px solid var(--qv-border-strong);
@@ -4830,11 +4833,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
   .qv-live-panel__m-top:has(.qv-live-panel__m-foto) {
     --m-reserva: 108px;
-  }
-  .qv-live-panel__m-top .qv-live-panel__cerrar {
-    position: absolute;
-    top: 0;
-    right: 0;
   }
   .qv-live-panel__m-top .qv-live-panel__placa--m {
     min-height: 48px;
@@ -4898,16 +4896,14 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 500;
     color: var(--qv-text-secondary);
   }
-  /* Estadísticas + designación: en pantallas bajas la hoja plegada las oculta (ver abajo). */
+  /* Estadísticas + designación: la hoja plegada las oculta a cualquier alto (solo placa, conductor, estado y acciones). */
   .qv-live-panel__m-detalle {
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  @media (max-height: 739px) {
-    .qv-live-panel[data-hoja='plegada'] .qv-live-panel__m-detalle {
-      display: none;
-    }
+  .qv-live-panel[data-hoja='plegada'] .qv-live-panel__m-detalle {
+    display: none;
   }
   .qv-live-panel__m-stats {
     display: grid;
