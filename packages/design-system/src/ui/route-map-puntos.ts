@@ -52,7 +52,7 @@ export function firmaPunto(
     | 'molinos'
     | 'onClick'
     | 'draggable'
-    | 'etiquetaSiempre'
+    | 'sinEtiquetaMovil'
     | 'onDragEnd'
   >,
   contexto: { oscuro: boolean; tipo: 'stop' | 'marker'; rol: string },
@@ -69,7 +69,7 @@ export function firmaPunto(
     punto.placa,
     punto.fotoUrl,
     punto.colorLinea,
-    punto.etiquetaSiempre,
+    punto.sinEtiquetaMovil,
     // Solo lo que obliga a rehacer el dibujo: nivel y parpadeo. La cantidad de abiertas y la
     // selección se actualizan EN el elemento existente (`actualizarVehiculoEnLugar`): recrearlo
     // por eso recargaría la foto y reiniciaría la animación.

@@ -97,8 +97,11 @@ export function construirPuntosControl(
   const idsEfectivos = new Set(efectivos.map((pc) => pc.id));
   const espera = contexto.puntosControl
     .filter((pc) => pc.rol === 'espera' && !idsEfectivos.has(pc.id))
-    .map((pc) => ({ ...punto(pc, 'Espera Molinos'), etiquetaSiempre: true }));
-  return [...efectivos.map((pc, index) => punto(pc, `Punto de control ${index + 1}`)), ...espera];
+    .map((pc) => punto(pc, 'Espera Molinos'));
+  return [
+    ...efectivos.map((pc, index) => ({ ...punto(pc, `Punto de control ${index + 1}`), sinEtiquetaMovil: true })),
+    ...espera,
+  ];
 }
 
 /** Id ESTABLE del marker de un vehículo — no el id sintético `${lat}:${lng}:${index}` que

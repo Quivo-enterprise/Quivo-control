@@ -102,6 +102,13 @@ body::-webkit-scrollbar {
   background: color-mix(in srgb, var(--qv-color-primary) 88%, black);
 }
 
+/* En oscuro oscurecer el primario deja 3,9:1 con el texto on-primary: el hover aclara (5,8:1). */
+@media (prefers-color-scheme: dark) {
+  .qv-button--primary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--qv-color-primary) 88%, white);
+  }
+}
+
 .qv-button--secondary {
   background: var(--qv-color-primary-subtle);
   color: var(--qv-color-primary);
@@ -308,7 +315,7 @@ body::-webkit-scrollbar {
   color: var(--qv-color-primary);
 }
 
-/* En oscuro el primario (#6672f5) sobre primary-subtle (#191943) da 4,19:1: se usa el texto primario (15,2:1). */
+/* En oscuro el primario (#6e79f6) sobre primary-subtle (#191943) da 4,54:1, justo: se usa el texto primario (15,2:1). */
 @media (prefers-color-scheme: dark) {
   .qv-status-badge--pending {
     color: var(--qv-text-primary);
@@ -2512,7 +2519,7 @@ body::-webkit-scrollbar {
 
 /* En el teléfono el mapa va limpio: los puntos de control (ida y vuelta en el mismo sitio) no llevan rótulo. */
 @media (max-width: 720px) {
-  [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada):not(.qv-gmap-pt--etiqueta-siempre) .qv-gmap-label--marker {
+  [data-lbl-marker='1'] .qv-gmap-pt.qv-gmap-pt--sin-etiqueta-movil:not(.qv-gmap-pt--parada) .qv-gmap-label--marker {
     display: none;
   }
 }
@@ -5895,8 +5902,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   :root {
     --qv-text-secondary: #a5b2c6;
     --qv-border-strong: #64748b;
-    /* Primario +luminosidad: 4.5:1 sobre tarjeta, primary-subtle y con on-primary encima. */
-    --qv-color-primary: #6e79f6;
   }
 }
 

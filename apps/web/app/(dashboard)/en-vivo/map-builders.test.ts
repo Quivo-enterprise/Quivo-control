@@ -314,9 +314,9 @@ describe('construirPuntosControl', () => {
     ]);
   });
 
-  it('solo el PC de espera conserva el rótulo en el teléfono', () => {
+  it('solo los PC numerados pierden el rótulo en el teléfono', () => {
     const r = construirPuntosControl(contexto, undefined, null);
-    expect(r.map((p) => p.etiquetaSiempre)).toEqual([undefined, undefined, true]);
+    expect(r.map((p) => p.sinEtiquetaMovil)).toEqual([true, true, undefined]);
   });
 
   it('lo numera dentro del orden efectivo cuando la vuelta lo designa', () => {

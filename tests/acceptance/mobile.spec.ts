@@ -112,7 +112,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     try {
       await page.goto('/mas', { waitUntil: 'networkidle', timeout: 60_000 });
       const color = await page.locator('.qv-mas-user__name').evaluate((el) => getComputedStyle(el).color);
-      expect(color).not.toBe('rgb(0, 0, 0)');
+      expect(color).toBe('rgb(241, 245, 249)');
     } finally {
       await page.emulateMedia({ colorScheme: 'light' });
     }

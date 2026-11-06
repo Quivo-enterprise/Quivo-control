@@ -56,8 +56,8 @@ export interface MapPoint {
   // sprites del bus (`quivo-vehicle-symbols` pedía una imagen `quivo-bus-` que no existe para
   // ellos).
   pinType?: 'pin' | 'stop' | 'pulse' | 'node' | 'vehicle';
-  /** Su rótulo se mantiene en el teléfono, donde los de los demás marcadores se ocultan. */
-  etiquetaSiempre?: boolean;
+  /** Oculta su rótulo en el teléfono (los demás marcadores lo conservan). */
+  sinEtiquetaMovil?: boolean;
   draggable?: boolean;
   onDragEnd?: (point: { lat: number; lng: number }) => void;
   onClick?: () => void;

@@ -418,7 +418,7 @@ body {
 .vehicle-type-card > svg:last-child {
   background: var(--qv-color-primary);
   border-radius: var(--qv-radius-full);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
   padding: 2px;
   position: absolute;
   right: var(--qv-space-xs);
@@ -2030,7 +2030,7 @@ body {
   background: var(--qv-color-primary);
   border-radius: var(--qv-radius-md);
   box-shadow: 0 8px 20px color-mix(in srgb, var(--qv-color-primary) 24%, transparent);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .vehicle-panel-header__eyebrow,
@@ -2216,7 +2216,7 @@ body {
   cursor: pointer;
   border-radius: var(--qv-radius-sm);
   background: var(--qv-color-primary);
-  color: white;
+  color: var(--qv-color-on-primary);
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -3145,7 +3145,7 @@ body {
 
 .vehicle-type-card-btn__badge {
   background: var(--qv-color-primary);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .vehicle-form-grid {
@@ -3303,7 +3303,7 @@ body {
   border: 2px solid var(--qv-surface-card);
   border-radius: var(--qv-radius-sm);
   box-shadow: var(--qv-shadow-sm);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
   display: flex;
   gap: var(--qv-space-xs);
   left: 50%;
