@@ -127,6 +127,8 @@ export function resolveJwtSecret(): string {
   return jwtSecret;
 }
 
+export const SESSION_TTL_SECONDS = parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '30d');
+
 /**
  * Instancia única de Better-Auth (doc técnico §5, QUI-219: "no construir auth a mano").
  * Vive acá (no en apps/api) porque tanto el seed (`prisma/seed.ts`, en este mismo
@@ -158,8 +160,9 @@ export const auth = betterAuth({
     },
   },
   session: {
-    // QUI-356: bajado de 30d a 7d — un refresh token robado servía un mes entero.
-    expiresIn: parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '7d'),
+    // Ventana deslizante: `AuthService.refresh` renueva `expiresAt` con este mismo TTL en cada
+    // rotación, así que 30d son 30 días de *inactividad*, no de vida total de la sesión.
+    expiresIn: SESSION_TTL_SECONDS,
   },
   plugins: [
     bearer(),

@@ -10,8 +10,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { loginRequest, logoutRequest, refreshRequest } from './api-client';
+import { loginRequest, logoutRequest, RefreshHttpError, refreshRequest } from './api-client';
 import { getJwtExpiryMs } from './jwt';
+import { decidirTrasFalloRefresh, retryDelayMs } from './refresh-policy';
 
 export interface AuthUser {
   id: string;
@@ -78,6 +79,31 @@ interface StoredSession {
   refreshToken: string | null;
 }
 
+/** Access token vencido o dentro del margen de refresh (los opacos no se pueden evaluar). */
+function necesitaRefresh(token: string): boolean {
+  const expiryMs = getJwtExpiryMs(token);
+  return expiryMs !== null && expiryMs - Date.now() <= REFRESH_MARGIN_MS;
+}
+
+function leerSesionGuardada(): StoredSession | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Serializa el check-and-refresh entre pestañas del mismo origen; sin Web Locks corre directo
+ * (la relectura de `localStorage` dentro de la sección reduce, pero no elimina, la carrera). */
+async function conLockEntrePestanias(fn: () => Promise<void>): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    await navigator.locks.request('quivo.auth.refresh', fn);
+    return;
+  }
+  await fn();
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
     user: null,
@@ -89,7 +115,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<StoredSession>({ user: null, token: null, refreshToken: null });
-  const scheduleRefreshRef = useRef<(token: string, refreshTokenValue: string) => void>(() => {});
+  const scheduleRefreshRef = useRef<(token: string) => void>(() => {});
+  const performRefreshRef = useRef<() => Promise<void>>(async () => {});
+  const refrescandoRef = useRef(false);
+  /** Reintentos consecutivos fallidos por red/5xx; >0 significa que hay un reintento pendiente. */
+  const retryAttemptRef = useRef(0);
 
   const clearScheduledRefresh = useCallback(() => {
     if (refreshTimeoutRef.current) {
@@ -101,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearSession = useCallback(() => {
     clearScheduledRefresh();
     sessionRef.current = { user: null, token: null, refreshToken: null };
+    retryAttemptRef.current = 0;
     window.localStorage.removeItem(STORAGE_KEY);
     setState({ user: null, token: null, refreshToken: null, loading: false, error: null });
   }, [clearScheduledRefresh]);
@@ -117,39 +148,93 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const performRefresh = useCallback(
-    async (refreshTokenValue: string) => {
-      try {
-        const response = await refreshRequest(refreshTokenValue);
-        const user = sessionRef.current.user;
-        if (!user) {
-          clearSession();
+  const performRefresh = useCallback(async () => {
+    if (refrescandoRef.current) {
+      return;
+    }
+    refrescandoRef.current = true;
+    // Recién acá (pasado el guard) se cancela el timer: si ya hay un refresh en vuelo, un
+    // reintento pendiente no se debe perder.
+    clearScheduledRefresh();
+    try {
+      await conLockEntrePestanias(async () => {
+        // Se relee el storage ya dentro del lock: otra pestaña pudo rotar la sesión mientras
+        // esperábamos, y mandar el refresh token viejo es lo que provocaba los 401 en cascada.
+        if (!sessionRef.current.refreshToken) {
+          return; // sin sesión local, o cerrada en otra pestaña (el listener de `storage` la vació)
+        }
+        const guardada = leerSesionGuardada();
+        const actual = sessionRef.current;
+        // Storage vacío o corrupto pero la sesión en memoria está completa (limpiado en esta
+        // misma pestaña, que no recibe su propio evento `storage`): se refresca desde memoria.
+        const base =
+          guardada?.user && guardada.token && guardada.refreshToken
+            ? guardada
+            : actual.user && actual.token
+              ? actual
+              : null;
+        if (!base?.user || !base.token || !base.refreshToken) {
           return;
         }
-        persistSession(user, response.accessToken, response.refreshToken);
-        scheduleRefreshRef.current(response.accessToken, response.refreshToken);
-      } catch {
-        // El refresh token expiró o la API lo rechazó: no hay forma de renovar, cerrar sesión.
-        clearSession();
-      }
-    },
-    [clearSession, persistSession],
-  );
+        const { user, token, refreshToken: enviado } = base;
+        // Alinea la memoria con lo que se va a enviar (storage puede ir por delante si otra
+        // pestaña rotó mientras esperábamos el lock): la comparación de abajo es contra esto.
+        sessionRef.current = { user, token, refreshToken: enviado };
+        if (!necesitaRefresh(token)) {
+          persistSession(user, token, enviado);
+          scheduleRefreshRef.current(token);
+          return;
+        }
+        try {
+          const response = await refreshRequest(enviado);
+          if (sessionRef.current.refreshToken !== enviado) {
+            // Logout, otro login o rotación de otra pestaña durante el request: no pisar.
+            return;
+          }
+          persistSession(user, response.accessToken, response.refreshToken);
+          scheduleRefreshRef.current(response.accessToken);
+        } catch (error) {
+          if (sessionRef.current.refreshToken !== enviado) {
+            return;
+          }
+          const status = error instanceof RefreshHttpError ? error.status : null;
+          if (decidirTrasFalloRefresh(status) === 'logout') {
+            // 4xx definitivo: la API rechazó el refresh token, no hay forma de renovar.
+            clearSession();
+            return;
+          }
+          // Red caída, 5xx u otro fallo transitorio: se conserva la sesión y se reintenta.
+          clearScheduledRefresh();
+          refreshTimeoutRef.current = setTimeout(
+            () => void performRefreshRef.current(),
+            retryDelayMs(retryAttemptRef.current++),
+          );
+        }
+      });
+    } finally {
+      refrescandoRef.current = false;
+    }
+  }, [clearScheduledRefresh, clearSession, persistSession]);
 
   const scheduleRefresh = useCallback(
-    (token: string, refreshTokenValue: string) => {
+    (token: string) => {
       clearScheduledRefresh();
+      retryAttemptRef.current = 0; // todo reagendado que no es un reintento corta la racha
       const expiryMs = getJwtExpiryMs(token);
       if (expiryMs === null) {
         return; // token opaco (ej. bypass de desarrollo) — no se puede programar
       }
       const delay = Math.max(expiryMs - Date.now() - REFRESH_MARGIN_MS, 0);
       refreshTimeoutRef.current = setTimeout(() => {
-        void performRefresh(refreshTokenValue);
+        void performRefreshRef.current();
       }, delay);
     },
-    [clearScheduledRefresh, performRefresh],
+    [clearScheduledRefresh],
   );
+
+  useEffect(() => {
+    performRefreshRef.current = performRefresh;
+  }, [performRefresh]);
 
   useEffect(() => {
     scheduleRefreshRef.current = scheduleRefresh;
@@ -157,7 +242,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isDevBypassEnabled()) {
-      const storedRole = window.localStorage.getItem(DEV_BYPASS_ROLE_KEY) ?? DEFAULT_DEV_BYPASS_ROLE;
+      const storedRole =
+        window.localStorage.getItem(DEV_BYPASS_ROLE_KEY) ?? DEFAULT_DEV_BYPASS_ROLE;
       const bypassUser =
         DEV_BYPASS_USERS[storedRole] ?? (DEV_BYPASS_USERS[DEFAULT_DEV_BYPASS_ROLE] as AuthUser);
       sessionRef.current = { user: bypassUser, token: 'dev-bypass-token', refreshToken: null };
@@ -171,11 +257,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { user: AuthUser; token: string; refreshToken?: string };
+    const parsed = leerSesionGuardada();
+    if (parsed?.user && parsed.token) {
       const refreshTokenValue = parsed.refreshToken ?? null;
-      sessionRef.current = { user: parsed.user, token: parsed.token, refreshToken: refreshTokenValue };
+      sessionRef.current = {
+        user: parsed.user,
+        token: parsed.token,
+        refreshToken: refreshTokenValue,
+      };
       setState({
         user: parsed.user,
         token: parsed.token,
@@ -184,7 +273,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error: null,
       });
       if (refreshTokenValue) {
-        scheduleRefresh(parsed.token, refreshTokenValue);
+        scheduleRefresh(parsed.token);
       }
     } else {
       setState((s) => ({ ...s, loading: false }));
@@ -245,7 +334,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Reprograma el auto-refresh de esta pestaña contra el token vigente — si se
           // dejara el timer viejo (armado sobre el token previo a la rotación), su próximo
           // disparo fallaría igual por el mismo motivo (token desactualizado).
-          scheduleRefreshRef.current(parsed.token, refreshTokenValue);
+          scheduleRefreshRef.current(parsed.token);
         } else {
           clearScheduledRefresh();
         }
@@ -259,12 +348,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('storage', handleStorage);
   }, [clearScheduledRefresh]);
 
+  // Los timers se congelan con el teléfono dormido o la pestaña en segundo plano: al volver
+  // (visible/focus) se refresca ya si el access token venció o está por vencer, y al volver la
+  // red (`online`) se reintenta de inmediato si había un reintento pendiente.
+  useEffect(() => {
+    function refrescarAhora(forzar: boolean): void {
+      const { token, refreshToken } = sessionRef.current;
+      if (!token || !refreshToken || (!forzar && !necesitaRefresh(token))) {
+        return;
+      }
+      void performRefreshRef.current();
+    }
+    const alVolverVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refrescarAhora(false);
+      }
+    };
+    const alEnfocar = () => refrescarAhora(false);
+    const alVolverLaRed = () => refrescarAhora(retryAttemptRef.current > 0);
+
+    document.addEventListener('visibilitychange', alVolverVisible);
+    window.addEventListener('focus', alEnfocar);
+    window.addEventListener('online', alVolverLaRed);
+    return () => {
+      document.removeEventListener('visibilitychange', alVolverVisible);
+      window.removeEventListener('focus', alEnfocar);
+      window.removeEventListener('online', alVolverLaRed);
+    };
+  }, [clearScheduledRefresh]);
+
   const login = async (email: string, password: string): Promise<void> => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const response = await loginRequest(email, password);
       persistSession(response.user, response.accessToken, response.refreshToken);
-      scheduleRefresh(response.accessToken, response.refreshToken);
+      scheduleRefresh(response.accessToken);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error desconocido al iniciar sesión';
       setState((s) => ({ ...s, loading: false, error: message }));
