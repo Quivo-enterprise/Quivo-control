@@ -5377,15 +5377,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     gap: 0;
   }
 
-  /* En @supports: el minificador funde reglas contiguas idénticas en una lista, y un :has() desconocido (Chrome < 105) anula la lista entera. */
-  @supports selector(:has(a)) {
-    .qv-admin-layout:has(.qv-route-builder-wrapper) {
-      grid-template-columns: minmax(0, 1fr);
-      padding: 0;
-      gap: 0;
-    }
-  }
-
   .qv-admin-layout__main {
     gap: 0;
   }
@@ -5618,7 +5609,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     z-index: 11;
     background: rgb(0 0 0 / 0.4);
   }
-  .qv-live-cuerpo:has(.qv-live-flota--abierto) .qv-live-cajon {
+  .qv-live-cuerpo--flota-abierta .qv-live-cajon {
     display: none;
   }
 }
@@ -5639,7 +5630,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     pointer-events: none;
   }
   /* Flota abierta (hoja z 12 + fondo z 11): los chips quedan debajo, como el resto del mapa. */
-  .qv-live-cuerpo:has(.qv-live-flota--abierto) .qv-chips-mapa {
+  .qv-live-cuerpo--flota-abierta .qv-chips-mapa {
     z-index: 10;
   }
   .qv-chips-mapa__izq {
@@ -6101,6 +6092,41 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     height: calc(100vh - var(--qv-tabbar-h));
     height: calc(100dvh - var(--qv-tabbar-h));
     padding-bottom: 0;
+  }
+
+  /* Chrome < 105 (sin :has() ni dvh): lo que las reglas con :has()/dvh no cubren. Aparte de esas reglas a propósito: el minificador funde reglas idénticas contiguas y quita un `vh` previo a un `dvh`. */
+  @supports not selector(:has(a)) {
+    /* Sin :has(.qv-page-header) no se sabe si la página trae encabezado propio: se oculta la topbar (solo el título) y el PageHeader sube 14 px para absorber el padding del contenido. */
+    .qv-admin-layout--tabs .qv-admin-layout__topbar {
+      display: none;
+    }
+    .qv-admin-layout--tabs .qv-page-header {
+      margin-top: -14px;
+    }
+    html {
+      scroll-padding-top: calc(66px + env(safe-area-inset-top));
+      scroll-padding-bottom: calc(76px + env(safe-area-inset-bottom));
+    }
+    .qv-admin-layout--tabs .qv-admin-layout__content {
+      padding-bottom: calc(5.5rem + var(--qv-tabbar-h));
+    }
+    /* /rutas: el wrapper (height 100% !important en globals.css) necesita alto definido; mayor especificidad porque globals.css carga después. */
+    .qv-admin-layout .qv-route-builder-wrapper {
+      height: calc(100vh - 3.5rem - env(safe-area-inset-top) - var(--qv-tabbar-h, 0px)) !important;
+    }
+    .qv-live-panel {
+      max-height: min(72vh, 34rem);
+    }
+    .qv-admin-layout,
+    .qv-auth-layout {
+      min-height: 100vh;
+    }
+    .qv-modal-backdrop .qv-modal,
+    .qv-modal-backdrop .qv-modal--wide,
+    .qv-modal-backdrop .qv-modal--xl,
+    .qv-modal-backdrop .qv-modal--2xl {
+      height: 100vh;
+    }
   }
 
   /* La tabbar ya reserva el inset inferior: la hoja no lo suma otra vez. */

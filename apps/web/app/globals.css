@@ -1,13 +1,6 @@
 @import 'tailwindcss';
 @import '@quivo/design-system/styles.css';
 
-/* Tailwind preflight va en @layer y se pierde en Chrome < 99: border-box sin capa no depende de él. */
-*,
-::before,
-::after {
-  box-sizing: border-box;
-}
-
 /*
  * El design system expone --qv-font-display/--qv-font-body como variables (sin @font-face
  * propio) — acá se conectan a las fuentes reales cargadas con next/font/google en

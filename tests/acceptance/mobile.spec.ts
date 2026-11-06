@@ -750,7 +750,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(row).toHaveCSS('display', 'grid');
   });
 
-  test('CSS compilado: ninguna lista de selectores mezcla :has() con selectores sin :has()', async () => {
+  test('CSS en dev: ninguna lista de selectores mezcla :has() con selectores sin :has()', async () => {
+    // shortcut: corre contra `next dev`, no ve el minificador (que funde reglas y quita `vh` antes de `dvh`); revisar el CSS de `next build` antes de desplegar, o apuntar este test a `next start`.
     await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
     // Un :has() desconocido (Chrome < 105) anula la lista entera; el minificador funde reglas idénticas contiguas.
     const mezcladas = await page.evaluate(() => {

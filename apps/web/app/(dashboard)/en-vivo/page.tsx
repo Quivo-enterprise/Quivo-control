@@ -608,7 +608,7 @@ function EnVivoContenido() {
         />
       )}
 
-      <div className="qv-live-cuerpo">
+      <div className={`qv-live-cuerpo${hayHud && flotaAbierta ? ' qv-live-cuerpo--flota-abierta' : ''}`}>
         {/* Solo móvil (CSS): tocar fuera de la hoja de flota la cierra y devuelve el foco al botón Flota. */}
         {hayHud && flotaAbierta && <div className="qv-live-flota-fondo" aria-hidden="true" onClick={cerrarFlota} />}
         {hayHud && (
