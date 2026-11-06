@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { prisma, withTenantContext } from '@quivo/db';
+import { NotFoundException } from '@nestjs/common';
 import { fechaActualBolivia } from '@quivo/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser } from '../../common/auth/jwt-auth.guard.js';
 import { FilaService } from './fila.service.js';
+import { MSG_PC_NO_ENCONTRADO } from './salidas.logic.js';
 import { ADMIN, borrarMundo, crearMundo, type MundoSalidas } from './salidas.fixtures.js';
 
 /** El panel de la fila trae el conductor de la sesión de cada fila, sin depender de posiciones en vivo. */
@@ -33,6 +35,8 @@ describe('fila de salida: conductorNombre', () => {
   });
 
   it('otro sindicato no ve la terminal ni sus conductores', async () => {
-    await expect(fila.estadoPanel(actor(m.sindicatoB), m.pcTerminalA)).rejects.toThrow();
+    const intento = fila.estadoPanel(actor(m.sindicatoB), m.pcTerminalA);
+    await expect(intento).rejects.toBeInstanceOf(NotFoundException);
+    await expect(intento).rejects.toThrow(MSG_PC_NO_ENCONTRADO);
   });
 });

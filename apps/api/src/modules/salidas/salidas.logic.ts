@@ -51,7 +51,7 @@ export interface FilaCalculada {
   vehiculoId: string;
   placa: string;
   llegadaTs: Date;
-  /** Conductor de la sesión activa de esa fila (misma regla que en-vivo). */
+  /** Conductor de la sesión de la fila. El LEFT JOIN (mismo `sindicatoId`) da null con datos inconsistentes en vez de descartar la fila. */
   conductorNombre?: string | null;
 }
 
