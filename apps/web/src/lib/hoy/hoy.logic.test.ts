@@ -85,12 +85,17 @@ describe('haceCorto', () => {
 });
 
 describe('estadoVehiculoHoy', () => {
-  it('reportando: insignia activa, km/h redondeado, vuelta y antigüedad con lo transcurrido', () => {
-    expect(estadoVehiculoHoy(posi(), 3000)).toEqual({ insignia: 'active', etiqueta: 'Reportando', kmh: 23, vuelta: 2, linea: 'Línea 16', hace: 'hace 7 s' });
+  it('reportando: insignia activa, km/h redondeado y vuelta', () => {
+    expect(estadoVehiculoHoy(posi())).toEqual({ insignia: 'active', etiqueta: 'Reportando', kmh: 23, vuelta: 2, linea: 'Línea 16' });
   });
   it('sin vuelta, sin velocidad y sin fix', () => {
     const e = estadoVehiculoHoy(posi({ vuelta: null, speed: null, antiguedadFixMs: null, estadoFrescura: 'perdido' }));
-    expect(e).toMatchObject({ insignia: 'canceled', etiqueta: 'Sin señal', kmh: null, vuelta: null, hace: null });
+    expect(e).toMatchObject({ insignia: 'canceled', etiqueta: 'Sin señal', kmh: null, vuelta: null });
+  });
+  it('la velocidad solo se muestra si el vehículo reporta', () => {
+    for (const estadoFrescura of ['perdido', 'en_pausa', 'finalizado', 'detenido'] as const) {
+      expect(estadoVehiculoHoy(posi({ estadoFrescura, speed: 9 })).kmh).toBeNull();
+    }
   });
   it('estado desconocido cae a sin datos (neutro)', () => {
     expect(estadoVehiculoHoy(posi({ estadoFrescura: 'raro' as never }))).toMatchObject({ insignia: 'inactive', etiqueta: 'Sin datos' });

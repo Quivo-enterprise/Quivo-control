@@ -5,16 +5,17 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Loader, PageHeader, PlateBadge, StatusBadge } from '@quivo/design-system';
 import { formatearTelefonoBolivia } from '@quivo/shared';
-import { ChevronRight, MapPin, MessageCircle, Phone, Search } from 'lucide-react';
+import { ChevronRight, Clock, MessageCircle, Phone, Search } from 'lucide-react';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { conductoresApi } from '../../src/lib/api/conductores';
 import { sancionesApi } from '../../src/lib/api/sanciones';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
 import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
+import { useReloj } from '../../src/lib/en-vivo/use-reloj';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
 import { useSaludRefresco } from '../../src/lib/en-vivo/use-salud-refresco';
-import { BUSQUEDA_MIN, buscarHoy, estadoVehiculoHoy, fechaHoy, normalizarBusqueda, posicionDeVehiculo } from '../../src/lib/hoy/hoy.logic';
+import { BUSQUEDA_MIN, buscarHoy, estadoVehiculoHoy, fechaHoy, haceCorto, normalizarBusqueda, posicionDeVehiculo } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
 
 interface Kpi {
@@ -87,6 +88,19 @@ function PildoraEnVivo({ consulta }: { consulta: { dataUpdatedAt: number; isErro
   );
 }
 
+/** Hoja: el tick de 1 s re-renderiza solo este texto. La antigüedad del fix la mide el servidor al responder: se le suma lo que pasó desde el poll. */
+function HaceFix({ antiguedadFixMs, actualizadoEn }: { antiguedadFixMs: number | null; actualizadoEn: number }) {
+  const ahora = useReloj(1000);
+  const hace = haceCorto(antiguedadFixMs === null ? null : antiguedadFixMs + (ahora - actualizadoEn));
+  if (!hace) return null;
+  return (
+    <p className="qv-hoy__resultado-meta">
+      <Clock size={18} aria-hidden="true" />
+      {hace}
+    </p>
+  );
+}
+
 export function HoyMovil() {
   const { token } = useAuth();
   const [consulta, setConsulta] = useState('');
@@ -126,7 +140,7 @@ export function HoyMovil() {
     q.data !== undefined ? f(q.data) : falla(q) ? '—' : null;
 
   const conteo = posiciones.data ? conteoPorEstado(posiciones.data) : null;
-  const flota = conteo ? resumenFlota(conteo) : null;
+  const enServicio = conteo ? resumenFlota(conteo).enServicio : 0;
   const abiertas = alertas.data?.filter((i) => i.estado === 'abierta');
   const graves = abiertas?.filter((i) => i.gravedad !== 'leve').length ?? 0;
   const kpis: Kpi[] = [
@@ -134,7 +148,7 @@ export function HoyMovil() {
       id: 'servicio',
       etiqueta: 'En servicio',
       clase: 'servicio',
-      valor: valorDe(posiciones, () => flota?.enServicio ?? 0),
+      valor: valorDe(posiciones, () => enServicio),
     },
     {
       id: 'inactivos',
@@ -191,7 +205,7 @@ export function HoyMovil() {
         {abiertas ? textoAlertasAbiertas(abiertas.length) : ''}
       </p>
       <section className="qv-hoy__kpis" aria-labelledby="hoy-resumen" aria-busy={kpis.some((k) => k.valor === null)}>
-        <h2 id="hoy-resumen" className="qv-hoy__lbl" style={{ gridColumn: '1 / -1' }}>
+        <h2 id="hoy-resumen" className="qv-hoy__lbl">
           Resumen del día
         </h2>
         {kpis.map((k) => (
@@ -257,44 +271,41 @@ export function HoyMovil() {
               const numeroWa = telefonoParaWhatsapp(r.telefono);
               const wa = numeroWa ? `https://wa.me/${numeroWa}` : null;
               const pos = r.tipo === 'vehiculo' ? posicionDeVehiculo(posiciones.data ?? [], r.id) : undefined;
-              const est = pos ? estadoVehiculoHoy(pos, Date.now() - posiciones.dataUpdatedAt) : null;
+              const est = pos ? estadoVehiculoHoy(pos) : null;
               const linea = est?.linea ?? r.lineaNombre;
               const conductor = r.tipo === 'vehiculo' ? (r.conductorNombre ?? pos?.conductorNombre ?? null) : r.titulo;
               return (
                 <li key={`${r.tipo}-${r.id}`} className="qv-hoy__resultado">
-                  <div className="qv-hoy__resultado-top">
-                    {r.tipo === 'vehiculo' && <PlateBadge plate={r.titulo} size="lg" />}
-                    {linea && <span className="qv-hoy__tag">{linea}</span>}
-                  </div>
+                  {(r.tipo === 'vehiculo' || linea) && (
+                    <div className="qv-hoy__resultado-top">
+                      {r.tipo === 'vehiculo' && <PlateBadge plate={r.titulo} size="lg" />}
+                      {linea && <span className="qv-hoy__tag">{linea}</span>}
+                    </div>
+                  )}
                   {conductor && <p className="qv-hoy__resultado-nombre">{conductor}</p>}
-                  {est ? (
+                  {pos && est ? (
                     <>
                       <p className="qv-hoy__resultado-estado">
                         <StatusBadge status={est.insignia} label={est.etiqueta} />
                         {est.kmh !== null && <span>· {est.kmh} km/h</span>}
                         {est.vuelta !== null && <span>· vuelta {est.vuelta}</span>}
                       </p>
-                      {est.hace && (
-                        <p className="qv-hoy__resultado-meta">
-                          <MapPin size={18} aria-hidden="true" />
-                          {est.hace}
-                        </p>
-                      )}
+                      <HaceFix antiguedadFixMs={pos.antiguedadFixMs} actualizadoEn={posiciones.dataUpdatedAt} />
                     </>
                   ) : (
-                    <p className="qv-hoy__resultado-detalle">{r.tipo === 'vehiculo' && r.lineaNombre ? 'Sin sesión hoy' : r.detalle}</p>
+                    <p className="qv-hoy__resultado-detalle">{r.tipo === 'vehiculo' && r.lineaNombre && posiciones.data !== undefined ? 'Sin sesión hoy' : r.detalle}</p>
                   )}
                   {r.telefono && <p className="qv-hoy__resultado-tel">{formatearTelefonoBolivia(r.telefono)}</p>}
                   {(tel || wa) && (
                     <div className="qv-hoy__resultado-acciones">
                       {tel && (
-                        <a className="qv-hoy__btn" href={tel} aria-label={`Llamar a ${r.titulo}`}>
+                        <a className="qv-hoy__btn" href={tel} aria-label={`Llamar a ${conductor ?? r.titulo}`}>
                           <Phone size={24} aria-hidden="true" />
                           Llamar
                         </a>
                       )}
                       {wa && (
-                        <a className="qv-hoy__btn qv-hoy__btn--wa" href={wa} target="_blank" rel="noopener noreferrer" aria-label={`WhatsApp a ${r.titulo} (abre WhatsApp)`}>
+                        <a className="qv-hoy__btn qv-hoy__btn--wa" href={wa} target="_blank" rel="noopener noreferrer" aria-label={`WhatsApp a ${conductor ?? r.titulo} (abre WhatsApp)`}>
                           <MessageCircle size={24} aria-hidden="true" />
                           WhatsApp
                         </a>

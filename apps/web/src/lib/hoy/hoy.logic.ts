@@ -6,6 +6,7 @@ import {
   type PosicionEnVivo,
   type Vehiculo,
 } from '@quivo/shared';
+import type { StatusBadgeStatus } from '@quivo/design-system';
 import { estadoDe } from '../en-vivo/atencion';
 import { velocidadKmh } from '../en-vivo/alertas';
 import { presentacionFrescura } from '../en-vivo/traza';
@@ -89,10 +90,8 @@ export function fechaHoy(ahora: Date = new Date()): string {
   return `${p.weekday!.charAt(0).toUpperCase()}${p.weekday!.slice(1)} ${p.day} ${p.month}`;
 }
 
-export type EstadoInsignia = 'active' | 'inactive' | 'idle' | 'warning' | 'canceled';
-
 /** Forma del `StatusBadge` por estado: círculo ok, rombo aviso, cuadrado falla, hueco neutro. */
-const INSIGNIA: Record<EstadoFrescura, EstadoInsignia> = {
+const INSIGNIA: Record<EstadoFrescura, StatusBadgeStatus> = {
   reportando: 'active',
   detenido: 'idle',
   en_pausa: 'warning',
@@ -122,26 +121,21 @@ export function haceCorto(ms: number | null): string | null {
 }
 
 export interface EstadoVehiculoHoy {
-  insignia: EstadoInsignia;
+  insignia: StatusBadgeStatus;
   etiqueta: string;
   kmh: number | null;
   vuelta: number | null;
   linea: string;
-  hace: string | null;
 }
 
-/**
- * Datos de la tarjeta de resultado. `transcurridoMs` = tiempo desde que llegó el poll: la
- * antigüedad del fix viene medida por el servidor al responder, hay que sumarle lo que pasó después.
- */
-export function estadoVehiculoHoy(p: PosicionEnVivo, transcurridoMs = 0): EstadoVehiculoHoy {
+/** Datos de la tarjeta de resultado. La velocidad solo se muestra en vivo: un vehículo perdido/pausado/finalizado no lleva cifra. */
+export function estadoVehiculoHoy(p: PosicionEnVivo): EstadoVehiculoHoy {
   const estado = estadoDe(p);
   return {
     insignia: INSIGNIA[estado],
     etiqueta: presentacionFrescura(estado).etiqueta,
-    kmh: velocidadKmh(p.speed),
+    kmh: estado === 'reportando' ? velocidadKmh(p.speed) : null,
     vuelta: p.vuelta?.numero ?? null,
     linea: p.lineaNombre,
-    hace: haceCorto(p.antiguedadFixMs === null ? null : p.antiguedadFixMs + transcurridoMs),
   };
 }

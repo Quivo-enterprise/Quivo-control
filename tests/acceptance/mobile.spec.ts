@@ -1,5 +1,5 @@
 import { devices, expect, test, type Page } from '@playwright/test';
-import { PosicionEnVivoSchema } from '@quivo/shared';
+import { PosicionEnVivoSchema } from '../../packages/shared/src/entities/en-vivo';
 import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
 const ADMIN = { email: 'admin@quivo.local', password: 'Quivo123!' };
@@ -727,8 +727,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(resultado.locator('.qv-hoy__resultado-nombre')).toHaveText('José Bravo');
       await expect(resultado.locator('.qv-hoy__resultado-estado')).toHaveText(/Reportando\s*· 23 km\/h\s*· vuelta 2/);
       await expect(resultado.locator('.qv-hoy__resultado-meta')).toContainText(/hace \d+ s/);
-      await expect(resultado.getByRole('link', { name: 'Llamar' })).toHaveAttribute('href', 'tel:+59171234567');
-      await expect(resultado.getByRole('link', { name: 'WhatsApp' })).toHaveAttribute('href', 'https://wa.me/59171234567');
+      await expect(resultado.getByRole('link', { name: 'Llamar a José Bravo' })).toHaveAttribute('href', 'tel:+59171234567');
+      await expect(resultado.getByRole('link', { name: /^WhatsApp a José Bravo/ })).toHaveAttribute('href', 'https://wa.me/59171234567');
       for (const btn of await resultado.locator('a').all()) expect((await btn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 

@@ -5931,6 +5931,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-hoy__lbl--resultados {
     margin: 4px 2px -6px;
   }
+  .qv-hoy__kpis > .qv-hoy__lbl {
+    grid-column: 1 / -1;
+  }
   .qv-hoy__kpis {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5971,7 +5974,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-estado-reportando-texto);
   }
   .qv-hoy__kpi--sanciones .qv-hoy__kpi-valor {
-    color: #92400e;
+    color: var(--qv-color-warning-texto);
   }
   .qv-hoy__kpi-etiqueta {
     display: flex;
@@ -6000,12 +6003,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
   /* Tile rojo solo con alertas abiertas; en 0 queda neutro. */
   .qv-hoy__kpi--alerta {
-    background: #fee2e2;
+    background: var(--qv-color-danger-soft);
     border-color: var(--qv-color-danger);
   }
   .qv-hoy__kpi--alerta .qv-hoy__kpi-valor,
   .qv-hoy__kpi--alerta .qv-hoy__kpi-etiqueta {
-    color: #b91c1c;
+    color: var(--qv-color-danger-texto);
   }
   .qv-hoy__kpi-cargando {
     display: inline-block;
@@ -6026,16 +6029,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     }
   }
   @media (prefers-color-scheme: dark) {
-    .qv-hoy__kpi--sanciones .qv-hoy__kpi-valor {
-      color: #fcd34d;
-    }
-    .qv-hoy__kpi--alerta {
-      background: #3b1618;
-    }
-    .qv-hoy__kpi--alerta .qv-hoy__kpi-valor,
-    .qv-hoy__kpi--alerta .qv-hoy__kpi-etiqueta {
-      color: #fca5a5;
-    }
     .qv-hoy__chip {
       color: #2a0a0a;
     }
@@ -6169,15 +6162,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-color-on-primary);
   }
   .qv-hoy__btn--wa {
-    background: #15803d;
-    border-color: #15803d;
+    background: var(--qv-color-whatsapp);
+    border-color: var(--qv-color-whatsapp);
     color: #fff;
-  }
-  @media (prefers-color-scheme: dark) {
-    .qv-hoy__btn--wa {
-      background: #22a55b;
-      border-color: #22a55b;
-    }
   }
   .qv-hoy__btn:focus-visible {
     outline: 2px solid var(--qv-color-primary);
