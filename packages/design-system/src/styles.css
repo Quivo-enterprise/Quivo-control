@@ -5085,10 +5085,14 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     gap: 0;
   }
 
+  /* Una línea: el título de /salidas es la etiqueta de la terminal (de largo variable) y la altura sticky no puede cambiar. */
   .qv-page-header__title {
+    overflow: hidden;
     font-size: 22px;
     font-weight: 800;
     line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .qv-page-header__subtitle {
@@ -5889,6 +5893,20 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
   }
 
+  .qv-fila-m__estado {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+  }
+
+  .qv-fila-m__hora {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--qv-text-secondary);
+  }
+
   .qv-fila-m__cuenta {
     font: 800 24px/1 var(--qv-font-display);
     font-variant-numeric: tabular-nums;
@@ -5923,7 +5941,23 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   .qv-fila-m__menu-raiz {
+    position: relative;
     flex: none;
+  }
+
+  .qv-fila-m__progreso {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--qv-color-primary);
+  }
+
+  /* Vacía sigue en el árbol (región viva) pero no ocupa lugar ni gap del flex. */
+  .qv-fila-m__progreso:empty {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .qv-fila-m__kb {
@@ -5940,6 +5974,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     touch-action: manipulation;
   }
 
+  .qv-fila-m__kb[aria-disabled='true'] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .qv-fila-m__kb:focus-visible,
   .qv-fila-m__menu-item:focus-visible,
   .qv-fila-m__coll:focus-visible {
@@ -5949,8 +5988,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
   .qv-fila-m__menu {
     position: absolute;
-    top: 60px;
-    right: 12px;
+    top: calc(100% + 4px);
+    right: 0;
     z-index: 4;
     width: 176px;
     padding: 4px;
@@ -5988,7 +6027,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   .qv-fila-m__menu-item--peligro {
-    color: #b91c1c;
+    color: var(--qv-color-danger-texto);
   }
 
   .qv-fila-m__coll {
@@ -6057,12 +6096,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   @media (prefers-reduced-motion: reduce) {
     .qv-fila-m__coll-chevron {
       transition: none;
-    }
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .qv-fila-m__menu-item--peligro {
-      color: #fca5a5;
     }
   }
 }

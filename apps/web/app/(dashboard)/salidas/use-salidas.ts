@@ -31,8 +31,8 @@ export function useTerminales(token: string | null) {
 }
 
 /** Fila en vivo con poll de 5 s; igual que `use-en-vivo.ts`, se pausa con la pestaña oculta. */
-export function useFilaSalida(token: string | null, pcId: string | null) {
-  return useQuery<EstadoFilaSalidaPanel>({
+export function useFilaSalida<T = EstadoFilaSalidaPanel>(token: string | null, pcId: string | null, select?: (fila: EstadoFilaSalidaPanel) => T) {
+  return useQuery<EstadoFilaSalidaPanel, Error, T>({
     queryKey: keyFila(pcId ?? ''),
     enabled: Boolean(token && pcId),
     queryFn: () => salidasApi.fila(token as string, pcId as string),
@@ -40,8 +40,12 @@ export function useFilaSalida(token: string | null, pcId: string | null) {
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 2,
+    select,
   });
 }
+
+/** Para quien solo muestra el conteo: se re-renderiza cuando éste cambia, no con cada poll. */
+export const contarFila = (fila: EstadoFilaSalidaPanel) => fila.items.length;
 
 /** Cadencia de refresco de las reglas: otro operador puede cambiarlas y el día de Bolivia puede rodar. */
 export const INTERVALO_REGLAS_MS = 60_000;

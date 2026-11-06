@@ -129,7 +129,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - PR 9: color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
     - La key de Google Maps no funciona en localhost: los marcadores solo se verificaron en un harness aislado, no sobre el mapa real.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
-  - **Pendiente:** `scroll-padding-top` está fijo en 62 px; un encabezado que se parte en dos líneas puede tapar el elemento con foco. Revisar en Salidas (PR 6).
+  - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
 
 **Pendiente de la capacitación del 5/11 (prod):**

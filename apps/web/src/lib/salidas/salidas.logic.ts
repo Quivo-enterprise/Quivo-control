@@ -6,7 +6,6 @@ import {
   type FilaSalidaPanelItem,
   type FrecuenciaRegla,
   type GrupoVehiculo,
-  type JornadaVehiculo,
 } from '@quivo/shared';
 
 /** `HH:mm` → minutos del día (0–1439); `null` si el texto no es una hora válida. */
@@ -62,6 +61,32 @@ export const ETIQUETA_ESTADO_FILA: Record<EstadoVisualFila, string> = {
   demorado: 'Demorado',
   esperando: 'Esperando',
 };
+
+export const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
+  en_turno: 'active',
+  demorado: 'warning',
+  esperando: 'idle',
+};
+
+export type TipoAccion = 'despachar' | 'moverAlFinal' | 'retirar';
+
+export const TEXTO_PROGRESO: Record<TipoAccion, string> = {
+  despachar: 'Despachando…',
+  moverAlFinal: 'Moviendo…',
+  retirar: 'Retirando…',
+};
+
+/**
+ * Conductor de cada trufi según las posiciones en vivo: solo sesiones activas con vehículo y nombre; si un
+ * vehículo repite, gana la primera (el server ordena activa y más reciente primero).
+ */
+export function conductorPorVehiculoEnVivo(
+  posiciones: readonly { activa: boolean; vehiculoId?: string | null; conductorNombre?: string | null }[],
+): Record<string, string> {
+  const mapa: Record<string, string> = {};
+  for (const p of posiciones) if (p.activa && p.vehiculoId && p.conductorNombre && !(p.vehiculoId in mapa)) mapa[p.vehiculoId] = p.conductorNombre;
+  return mapa;
+}
 
 /** Franja de una regla: "08:00–10:30" o "Todo el día". */
 export function textoFranja(desdeMin: number | null, hastaMin: number | null): string {
@@ -150,13 +175,4 @@ export function validarBase(
     ok: false,
     mensaje: `Ingresá un número entero de ${FRECUENCIA_MIN_MINUTOS} a ${FRECUENCIA_MAX_MINUTOS} minutos${permiteVacio ? ', o dejalo vacío' : ''}.`,
   };
-}
-
-/** Conductor de hoy por vehículo (jornadas del día); omite los vehículos sin conductor asignado. */
-export function conductorPorVehiculo(
-  jornadas: ReadonlyArray<Pick<JornadaVehiculo, 'vehiculoId' | 'conductorNombre'>>,
-): Record<string, string> {
-  const mapa: Record<string, string> = {};
-  for (const j of jornadas) if (j.conductorNombre && !(j.vehiculoId in mapa)) mapa[j.vehiculoId] = j.conductorNombre;
-  return mapa;
 }

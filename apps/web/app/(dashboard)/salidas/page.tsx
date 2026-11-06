@@ -9,7 +9,7 @@ import { BaseRapida } from './base-rapida';
 import { FilaEnVivo } from './fila-en-vivo';
 import { FrecuenciasPanel } from './frecuencias-panel';
 import { GruposPanel } from './grupos-panel';
-import { mensajeError, useFilaSalida, useGruposVehiculo, useTerminales, useVehiculosSalida } from './use-salidas';
+import { contarFila, mensajeError, useFilaSalida, useGruposVehiculo, useTerminales, useVehiculosSalida } from './use-salidas';
 
 const ROLES_GRUPOS = ['admin_quivo', 'admin_sindicato'];
 
@@ -44,7 +44,7 @@ function SalidasContenido() {
   // Celular: el encabezado nombra la terminal y cuenta la fila (misma query que `FilaEnVivo`: cache compartida).
   // `etiqueta` ya trae la línea ("16 · ida · punto 1"), por eso el subtítulo no la repite.
   const terminal = esMovil && elegida ? opciones.find((o) => o.value === elegida) : undefined;
-  const enFila = useFilaSalida(terminal ? token : null, elegida || null).data?.items.length;
+  const enFila = useFilaSalida(terminal ? token : null, elegida || null, contarFila).data;
   const titulo = terminal?.label ?? 'Salidas';
   const subtitulo = terminal
     ? enFila === undefined

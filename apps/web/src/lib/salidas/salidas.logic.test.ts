@@ -2,7 +2,7 @@ import { CrearFrecuenciaReglaSchema } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ajustarBase,
-  conductorPorVehiculo,
+  conductorPorVehiculoEnVivo,
   estadoVisualFila,
   formatearCuenta,
   horaAMinutos,
@@ -148,16 +148,20 @@ describe('validarBase', () => {
   });
 });
 
-describe('conductorPorVehiculo', () => {
-  it('mapea vehículo a conductor, omite sin conductor y conserva el primero si se repite', () => {
-    expect(
-      conductorPorVehiculo([
-        { vehiculoId: 'a', conductorNombre: 'Bravo Soliz Javier' },
-        { vehiculoId: 'b', conductorNombre: null },
-        { vehiculoId: 'c', conductorNombre: '' },
-        { vehiculoId: 'a', conductorNombre: 'Otro' },
-      ]),
-    ).toEqual({ a: 'Bravo Soliz Javier' });
-    expect(conductorPorVehiculo([])).toEqual({});
+describe('conductorPorVehiculoEnVivo', () => {
+  const pos = (o: Partial<{ activa: boolean; vehiculoId: string | null; conductorNombre: string | null }>) => ({
+    activa: true, vehiculoId: 'v1', conductorNombre: 'Ana', ...o,
+  });
+  it('salta las sesiones inactivas', () => {
+    expect(conductorPorVehiculoEnVivo([pos({ activa: false })])).toEqual({});
+  });
+  it('salta las que no traen vehiculoId', () => {
+    expect(conductorPorVehiculoEnVivo([pos({ vehiculoId: null })])).toEqual({});
+  });
+  it('salta las que no traen nombre', () => {
+    expect(conductorPorVehiculoEnVivo([pos({ conductorNombre: null })])).toEqual({});
+  });
+  it('si el vehículo se repite, gana la primera', () => {
+    expect(conductorPorVehiculoEnVivo([pos({ conductorNombre: 'Ana' }), pos({ conductorNombre: 'Beto' }), pos({ vehiculoId: 'v2', conductorNombre: 'Cora' })])).toEqual({ v1: 'Ana', v2: 'Cora' });
   });
 });

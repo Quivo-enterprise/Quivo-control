@@ -70,7 +70,7 @@ function Stepper({ token, pcId, baseMin, cargando, errorCarga }: { token: string
       </div>
       <p className="qv-base-rapida__ayuda">
         <Info size={20} aria-hidden />
-        Aplica todos los días
+        Rige cuando ninguna regla del día aplica
       </p>
       {errorCarga && <Alert variant="danger" title="No se pudo cargar la frecuencia base">{errorCarga}</Alert>}
       {error && <Alert variant="danger" title="No se pudo guardar la base">{error}</Alert>}

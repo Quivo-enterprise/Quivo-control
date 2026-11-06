@@ -1,7 +1,6 @@
 import { devices, expect, test, type Page } from '@playwright/test';
 import { EstadoFilaSalidaPanelSchema } from '../../packages/shared/src/entities/fila-salida';
 import { InfraccionHoySchema } from '../../packages/shared/src/entities/infraccion';
-import { JornadasDelDiaSchema } from '../../packages/shared/src/entities/jornada';
 import { PosicionEnVivoSchema } from '../../packages/shared/src/entities/en-vivo';
 import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
@@ -194,16 +193,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
       // 1: aún no habilitado (salida anticipada); 2: no habilitado; 3: habilitado (despacho directo desde el menú).
       items: [item(1, '1234ABC', false), item(2, '5678XYZ', false), item(3, '4321QWE', true)],
     });
-    const jornadas = JornadasDelDiaSchema.parse({
-      fecha: ahora.toISOString().slice(0, 10),
-      vehiculos: [
-        {
-          sindicatoId: uuid(99), sindicatoNombre: 'Union', vehiculoId: uuid(21), placa: '1234ABC', numeroInterno: null,
-          conductorId: uuid(70), conductorNombre: 'Bravo Soliz Javier', lineaId: uuid(1), lineaNombre: 'Linea 120',
-          rutaSentido: 'ida', horaSalida: null, estado: 'dia_iniciado', inicioJornadaTs: null,
-        },
-      ],
-    });
+    // El conductor sale de /reportes/en-vivo/posiciones (la leen admin y operador); /reportes/jornadas es solo admin.
+    const posiciones = [
+      PosicionEnVivoSchema.parse({
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
+        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
+        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
+      }),
+    ];
     const respuestas: Record<string, unknown> = {
       '/v1/lineas': [
         {
@@ -223,15 +221,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
           obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8,
         },
       ],
-      [`/v1/salidas/${PC}/fila`]: fila,
       [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
-      '/v1/reportes/jornadas': jornadas,
+      '/v1/reportes/en-vivo/posiciones': posiciones,
       '/v1/vehiculos': [],
       '/v1/grupos-vehiculo': [],
     };
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
     let puts = 0;
     const posts: string[] = [];
+    const retirados = new Set<string>();
     try {
       await page.route('**/v1/**', async (route) => {
         const req = route.request();
@@ -241,8 +239,13 @@ test.describe('Panel móvil (Pixel 7)', () => {
           puts++;
           return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
         }
+        if (req.method() === 'GET' && path === `/v1/salidas/${PC}/fila`) {
+          const items = fila.items.filter((x) => !retirados.has(x.id));
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ ...fila, items }) });
+        }
         if (req.method() === 'POST' && path.startsWith(`/v1/salidas/${PC}/fila/`)) {
           posts.push(path.replace(`/v1/salidas/${PC}/fila/`, ''));
+          if (path.endsWith('/retirar')) retirados.add(path.split('/').at(-2)!);
           return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
         }
         if (req.method() === 'GET' && path in respuestas) {
@@ -280,8 +283,12 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(dialogo).toBeHidden();
       expect(puts).toBe(0);
 
-      // Fila: conductor por vehículo (jornadas de hoy) y Despachar solo en la primera, a todo el ancho y de 60 px.
+      // Fila: conductor por vehículo (posiciones en vivo), estado de la cola con su hora de salida, y Despachar solo en la primera, a todo el ancho y de 60 px.
       await expect(page.getByText('Bravo Soliz Javier')).toBeVisible();
+      await expect(page.locator('.qv-fila-m__estado').first()).toContainText('Sale ');
+      await expect(page.locator('.qv-fila-m__estado').nth(2)).toContainText('En turno');
+      await expect(page.locator('.qv-fila-m__estado').first()).toContainText('Esperando');
+      await expect(page.getByText('Rige cuando ninguna regla del día aplica')).toBeVisible();
       const viewport = page.viewportSize()!;
       const despachar = page.getByRole('button', { name: /^Despachar / });
       await expect(despachar).toHaveCount(1);
@@ -343,12 +350,17 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(dialogo).toContainText('sale de la fila sin registrarse');
       await dialogo.getByRole('button', { name: 'Retirar', exact: true }).click();
       await expect.poll(() => posts).toEqual([`${uuid(11)}/despachar`, `${uuid(12)}/retirar`]);
+      // La fila retirada desaparece: el foco pasa al ⋮ de la que ocupa su lugar, no a <body>.
+      await expect(page.getByRole('button', { name: 'Más acciones de 5678XYZ' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Más acciones de 4321QWE' })).toBeFocused();
 
       // Fila 3 está habilitada: Despachar desde el menú va directo, sin confirmación.
       await page.getByRole('button', { name: 'Más acciones de 4321QWE' }).click();
       await page.getByRole('menu', { name: 'Acciones de 4321QWE' }).getByRole('menuitem', { name: 'Despachar' }).click();
       await expect(dialogo).toBeHidden();
       await expect.poll(() => posts).toEqual([`${uuid(11)}/despachar`, `${uuid(12)}/retirar`, `${uuid(13)}/despachar`]);
+      // El menú se cerró al elegir: el foco vive en el ⋮ de la fila (no en <body>), también tras terminar la acción.
+      await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Más acciones de 4321QWE');
 
       // Salidas recientes: plegado de entrada, con el conteo; se despliega a pedido.
       const coll = page.getByRole('button', { name: /Salidas recientes/ });
@@ -368,6 +380,332 @@ test.describe('Panel móvil (Pixel 7)', () => {
     } finally {
       await page.setViewportSize({ width: 412, height: 915 }); // Pixel 7
       await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
+  test('Salidas: progreso visible, menú anclado, foco y cuenta vencida', async () => {
+    test.setTimeout(120_000);
+    const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const PC = uuid(3);
+    const ahora = new Date();
+    const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
+    // Fila 1 con hora de salida ya vencida (cuenta en color de aviso) y no habilitada (Despachar pide confirmación).
+    const item = (n: number, placa: string, eta: number) => ({
+      id: uuid(10 + n), vehiculoId: uuid(20 + n), placa, posicion: n, llegadaTs: iso(-10), etaTs: iso(eta),
+      esperaMs: 0, estado: 'en_fila', habilitado: false, demorado: false, anticipada: false,
+    });
+    const todos = [item(1, '1234ABC', -2), item(2, '5678XYZ', 6), item(3, '4321QWE', 12)];
+    let visibles = [...todos];
+    const posiciones = [
+      PosicionEnVivoSchema.parse({
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
+        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
+        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
+      }),
+    ];
+    const respuestas: Record<string, unknown> = {
+      '/v1/lineas': [{ id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null, colorTexto: null, nombreCorto: 'Expreso Tiquipaya Cercado Norte', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null }],
+      [`/v1/lineas/${uuid(1)}/rutas`]: [{ id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null, geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] } }],
+      [`/v1/rutas/${uuid(2)}/puntos-control`]: [{ id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50, obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8 }],
+      [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
+      '/v1/reportes/en-vivo/posiciones': posiciones,
+      '/v1/vehiculos': [],
+      '/v1/grupos-vehiculo': [],
+    };
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
+    let soltar!: () => void;
+    const compuerta = new Promise<void>((r) => (soltar = r));
+    try {
+      await page.route('**/v1/**', async (route) => {
+        const req = route.request();
+        const path = new URL(req.url()).pathname;
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        if (req.method() === 'GET' && path === `/v1/salidas/${PC}/fila`) {
+          const fila = EstadoFilaSalidaPanelSchema.parse({ puntoControlId: PC, baseMin: 8, servidorTs: new Date().toISOString(), salidasRecientes: [], items: visibles });
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(fila) });
+        }
+        if (req.method() === 'POST' && path.endsWith('/retirar')) {
+          await compuerta; // la acción queda "en vuelo" hasta que el test la suelte
+          visibles = visibles.filter((x) => x.id !== path.split('/').at(-2));
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
+        }
+        if (req.method() === 'GET' && path in respuestas) {
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(respuestas[path]) });
+        }
+        return route.fallback();
+      });
+      await page.goto('/salidas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const kb = (placa: string) => page.getByRole('button', { name: `Más acciones de ${placa}` });
+      const menuDe = (placa: string) => page.getByRole('menu', { name: `Acciones de ${placa}` });
+      const dialogo = page.getByRole('alertdialog');
+      await expect(kb('1234ABC')).toBeVisible({ timeout: 30_000 });
+
+      // Título de una sola línea con puntos suspensivos a 360 px (etiqueta larga): el encabezado sticky no cambia de alto.
+      await page.setViewportSize({ width: 360, height: 915 });
+      const titulo = page.getByRole('heading', { level: 1 });
+      await expect(titulo).toHaveText('Expreso Tiquipaya Cercado Norte · ida · punto 1');
+      const medida = await titulo.evaluate((e) => ({ alto: e.getBoundingClientRect().height, corte: e.scrollWidth > e.clientWidth }));
+      expect(medida.corte).toBe(true);
+      expect(medida.alto).toBeLessThan(30);
+      await page.setViewportSize({ width: 412, height: 915 });
+
+      // Número de posición con texto oculto "Posición " (un aria-label sobre un <span> sin rol no es fiable).
+      await expect(page.locator('.qv-fila-m__pos').first()).toHaveText('Posición 1');
+
+      // Cuenta vencida: color de texto de aviso (legible), no el --qv-color-warning de escritorio.
+      const colores = await page.evaluate(() => {
+        const de = (v: string) => {
+          const d = document.createElement('i');
+          d.style.color = `var(${v})`;
+          document.body.append(d);
+          const c = getComputedStyle(d).color;
+          d.remove();
+          return c;
+        };
+        return {
+          cuenta: getComputedStyle(document.querySelector('.qv-fila-m__cuenta--grande span')!).color,
+          texto: de('--qv-color-warning-texto'),
+          aviso: de('--qv-color-warning'),
+        };
+      });
+      expect(colores.cuenta).toBe(colores.texto);
+      expect(colores.cuenta).not.toBe(colores.aviso);
+
+      // Menú de la fila 1 (la más alta, con conductor): se abre justo bajo el ⋯, sin tapar el botón y por encima de la fila siguiente.
+      await kb('1234ABC').click();
+      const menu1 = menuDe('1234ABC');
+      await expect(menu1).toBeVisible();
+      const [bk, bm] = await Promise.all([kb('1234ABC').boundingBox(), menu1.boundingBox()]);
+      expect(bm!.y).toBeGreaterThanOrEqual(bk!.y + bk!.height);
+      expect(bm!.y - (bk!.y + bk!.height)).toBeLessThan(12);
+      expect(Math.abs(bm!.x + bm!.width - (bk!.x + bk!.width))).toBeLessThan(2);
+      const tapado = await menu1.evaluate((m) => {
+        const r = m.getBoundingClientRect();
+        return !m.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height - 6));
+      });
+      expect(tapado).toBe(false);
+      await page.keyboard.press('Escape');
+      await expect(menu1).toBeHidden();
+
+      // Última fila: el menú se abre entero y queda por encima de la barra de pestañas (no oculto tras ella).
+      await kb('4321QWE').click();
+      const bmU = (await menuDe('4321QWE').boundingBox())!;
+      const bTab = (await page.getByRole('navigation', { name: 'Pestañas', exact: true }).boundingBox())!;
+      expect(bmU.y + bmU.height).toBeLessThanOrEqual(bTab.y + 1);
+      await page.keyboard.press('Escape');
+
+      // Cancelar la confirmación abierta desde el botón Despachar devuelve el foco a Despachar (no al ⋯).
+      const despachar = page.getByRole('button', { name: 'Despachar 1234ABC' });
+      await despachar.click();
+      await expect(dialogo).toBeVisible();
+      await dialogo.getByRole('button', { name: 'Cancelar' }).click();
+      await expect(dialogo).toBeHidden();
+      await expect(despachar).toBeFocused();
+
+      // El sondeo cambia la fila con el menú abierto (la 2 pasa a ser la 1): el menú se cierra y el foco queda en su ⋯.
+      await kb('5678XYZ').click();
+      await expect(menuDe('5678XYZ').getByRole('menuitem', { name: 'Despachar' })).toBeFocused();
+      visibles = visibles.filter((x) => x.id !== todos[0]!.id);
+      await expect(menuDe('5678XYZ')).toBeHidden({ timeout: 15_000 });
+      await expect(kb('5678XYZ')).toBeFocused();
+
+      // Acción en curso (retirar con respuesta demorada): texto de progreso en la fila y el ⋯ no abre el menú.
+      await kb('4321QWE').click();
+      await menuDe('4321QWE').getByRole('menuitem', { name: 'Retirar' }).click();
+      await dialogo.getByRole('button', { name: 'Retirar', exact: true }).click();
+      const fila3 = page.getByRole('listitem').filter({ has: kb('4321QWE') });
+      await expect(fila3.getByRole('status')).toHaveText('Retirando…');
+      await expect(kb('4321QWE')).toHaveAttribute('aria-disabled', 'true');
+      // Ni un parpadeo: un efecto que cierre el menú después de abrirlo no basta.
+      await kb('4321QWE').evaluate((e) => {
+        (window as unknown as { __abrio: boolean }).__abrio = false;
+        new MutationObserver(() => {
+          if (e.getAttribute('aria-expanded') === 'true') (window as unknown as { __abrio: boolean }).__abrio = true;
+        }).observe(e, { attributes: true });
+      });
+      await kb('4321QWE').click({ force: true }); // Playwright trata aria-disabled como deshabilitado
+      await kb('4321QWE').focus();
+      await page.keyboard.press('ArrowDown');
+      await expect(menuDe('4321QWE')).toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as { __abrio: boolean }).__abrio)).toBe(false);
+      await expect(kb('4321QWE')).toBeFocused();
+      soltar();
+      await expect(kb('4321QWE')).toHaveCount(0);
+    } finally {
+      soltar();
+      await page.setViewportSize({ width: 412, height: 915 });
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
+  test('Salidas: región viva en el árbol, despacho de la fila 1, foco sin salto y menú ante fila única', async () => {
+    test.setTimeout(120_000);
+    const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const PC = uuid(3);
+    const ahora = new Date();
+    const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
+    // Fila larga (la página scrollea) con la 1 habilitada: Despachar va directo, sin diálogo.
+    const placa = (n: number) => `${1000 + n}ABC`;
+    const item = (n: number) => ({
+      id: uuid(10 + n), vehiculoId: uuid(20 + n), placa: placa(n), posicion: n, llegadaTs: iso(-10), etaTs: iso(n * 6 - 8),
+      esperaMs: 0, estado: 'en_fila', habilitado: n === 1, demorado: false, anticipada: false,
+    });
+    const todos = Array.from({ length: 16 }, (_, i) => item(i + 1));
+    let visibles = [...todos];
+    const respuestas: Record<string, unknown> = {
+      '/v1/lineas': [{ id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null, colorTexto: null, nombreCorto: 'Expreso Tiquipaya Cercado Norte', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null }],
+      [`/v1/lineas/${uuid(1)}/rutas`]: [{ id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null, geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] } }],
+      [`/v1/rutas/${uuid(2)}/puntos-control`]: [{ id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50, obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8 }],
+      [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
+      '/v1/reportes/en-vivo/posiciones': [],
+      '/v1/vehiculos': [],
+      '/v1/grupos-vehiculo': [],
+    };
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
+    const puerta = () => {
+      let soltar!: () => void;
+      const espera = new Promise<void>((r) => (soltar = r));
+      return { espera, soltar };
+    };
+    const despacho = puerta();
+    const mover = puerta();
+    try {
+      await page.route('**/v1/**', async (route) => {
+        const req = route.request();
+        const path = new URL(req.url()).pathname;
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        if (req.method() === 'GET' && path === `/v1/salidas/${PC}/fila`) {
+          const fila = EstadoFilaSalidaPanelSchema.parse({ puntoControlId: PC, baseMin: 8, servidorTs: new Date().toISOString(), salidasRecientes: [], items: visibles });
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(fila) });
+        }
+        if (req.method() === 'POST' && path.startsWith(`/v1/salidas/${PC}/fila/`)) {
+          const id = path.split('/').at(-2);
+          if (path.endsWith('/despachar')) {
+            await despacho.espera;
+            visibles = visibles.filter((x) => x.id !== id);
+          } else if (path.endsWith('/mover-al-final')) {
+            await mover.espera;
+            const x = visibles.find((v) => v.id === id)!;
+            visibles = [...visibles.filter((v) => v.id !== id), x];
+          }
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
+        }
+        if (req.method() === 'GET' && path in respuestas) {
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(respuestas[path]) });
+        }
+        return route.fallback();
+      });
+      await page.goto('/salidas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const kb = (n: number) => page.getByRole('button', { name: `Más acciones de ${placa(n)}` });
+      const menuDe = (n: number) => page.getByRole('menu', { name: `Acciones de ${placa(n)}` });
+      const dialogo = page.getByRole('alertdialog');
+      const filaDe = (n: number) => page.getByRole('listitem').filter({ has: kb(n) });
+      await expect(kb(1)).toBeVisible({ timeout: 30_000 });
+
+      // Región viva vacía: sigue en el árbol de accesibilidad (si no, el lector no anuncia el texto al aparecer) y no está en display:none.
+      await expect(filaDe(2).getByRole('status')).toHaveCount(1);
+      expect(await filaDe(2).locator('.qv-fila-m__progreso').evaluate((e) => getComputedStyle(e).display)).not.toBe('none');
+
+      // Despachar la fila 1 con respuesta demorada: el botón dice "Despachando…", la línea de estado no desaparece (la tarjeta no
+      // cambia de alto) y el texto de la región viva queda solo para el lector (no hay un segundo "Despachando…" visible).
+      const fila1 = filaDe(1);
+      const altoAntes = (await fila1.boundingBox())!.height;
+      await page.getByRole('button', { name: `Despachar ${placa(1)}` }).click();
+      await expect(page.getByRole('button', { name: `Despachar ${placa(1)}` })).toHaveText('Despachando…');
+      await expect(fila1.getByRole('status')).toHaveText('Despachando…');
+      await expect(fila1.locator('.qv-fila-m__estado')).toBeVisible();
+      expect((await fila1.boundingBox())!.height).toBe(altoAntes);
+      const cajaStatus = await fila1.getByRole('status').boundingBox();
+      expect(cajaStatus!.width).toBeLessThanOrEqual(1);
+      expect(cajaStatus!.height).toBeLessThanOrEqual(1);
+      despacho.soltar();
+      await expect(kb(1)).toHaveCount(0, { timeout: 15_000 });
+
+      // "Al final" de una fila lejana: mientras la acción vuela el usuario vuelve arriba; al terminar el foco regresa al ⋯
+      // sin arrastrar la pantalla de vuelta (focus con preventScroll).
+      await kb(10).scrollIntoViewIfNeeded();
+      await kb(10).click();
+      await menuDe(10).getByRole('menuitem', { name: 'Al final' }).click();
+      await dialogo.getByRole('button', { name: 'Mover al final' }).click();
+      await expect(filaDe(10).getByRole('status')).toHaveText('Moviendo…');
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+      mover.soltar();
+      await expect(filaDe(10).getByRole('status')).toHaveText('', { timeout: 15_000 });
+      await expect(kb(10)).toBeFocused();
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+      // El sondeo deja un solo trufi con el menú abierto: "Al final" pasa a deshabilitado, el menú se cierra y el foco queda en el ⋯.
+      await kb(2).scrollIntoViewIfNeeded();
+      await kb(2).click();
+      await expect(menuDe(2).getByRole('menuitem', { name: 'Al final' })).toBeFocused();
+      visibles = [visibles[0]!];
+      await expect(menuDe(2)).toBeHidden({ timeout: 15_000 });
+      await expect(kb(2)).toBeFocused();
+    } finally {
+      despacho.soltar();
+      mover.soltar();
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
+  test('Salidas como operador: no pide /reportes/jornadas (solo admin) y la fila se ve con el conductor', async ({ browser }, testInfo) => {
+    test.setTimeout(90_000);
+    const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const PC = uuid(3);
+    const ahora = new Date();
+    const iso = (min: number) => new Date(ahora.getTime() + min * 60_000).toISOString();
+    const fila = EstadoFilaSalidaPanelSchema.parse({
+      puntoControlId: PC, baseMin: 8, servidorTs: ahora.toISOString(), salidasRecientes: [],
+      items: [{ id: uuid(11), vehiculoId: uuid(21), placa: '1234ABC', posicion: 1, llegadaTs: iso(-10), etaTs: iso(3), esperaMs: 0, estado: 'en_fila', habilitado: false, demorado: false, anticipada: false }],
+    });
+    const posiciones = [
+      PosicionEnVivoSchema.parse({
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
+        totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
+        antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
+      }),
+    ];
+    const respuestas: Record<string, unknown> = {
+      '/v1/lineas': [{ id: uuid(1), sindicatoId: uuid(99), codigo: '120', nombre: 'Linea 120', color: null, colorSecundario: null, colorTexto: null, nombreCorto: '120', lema: null, descripcion: null, publicStatus: 'borrador', publishedAt: null }],
+      [`/v1/lineas/${uuid(1)}/rutas`]: [{ id: uuid(2), lineaId: uuid(1), sentido: 'ida', estado: 'activo', publicStatus: 'borrador', publishedAt: null, geometria: { type: 'LineString', coordinates: [[-66.2, -17.4], [-66.1, -17.3]] } }],
+      [`/v1/rutas/${uuid(2)}/puntos-control`]: [{ id: PC, rutaId: uuid(2), orden: 1, coord: { type: 'Point', coordinates: [-66.2, -17.4] }, radioToleranciaM: 50, obligatorio: true, estado: 'activo', rol: 'terminal', esperaMin: null, frecuenciaSalidaMin: 8 }],
+      [`/v1/salidas/${PC}/fila`]: fila,
+      [`/v1/salidas/${PC}/reglas`]: { puntoControlId: PC, fecha: ahora.toISOString().slice(0, 10), baseMin: 8, reglas: [] },
+      '/v1/reportes/en-vivo/posiciones': posiciones,
+      '/v1/vehiculos': [],
+    };
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
+    const jornadas: string[] = [];
+    // Sesión simulada de operador (mismo formato que guarda auth-context); sin login real, que está limitado a 5/min.
+    const context = await browser.newContext({ ...devices['Pixel 7'], baseURL: testInfo.project.use.baseURL });
+    try {
+      await context.addInitScript((sesion) => window.localStorage.setItem('quivo.session', JSON.stringify(sesion)), {
+        user: { id: uuid(500), email: 'op@quivo.local', rol: 'operador', sindicatoId: uuid(99) }, token: 'tok-operador', refreshToken: null,
+      });
+      const op = await context.newPage();
+      await op.route('**/v1/**', async (route) => {
+        const req = route.request();
+        const path = new URL(req.url()).pathname;
+        if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+        if (path.startsWith('/v1/reportes/jornadas')) {
+          jornadas.push(path);
+          return route.fulfill({ status: 403, headers: cors, contentType: 'application/json', body: '{"message":"Forbidden"}' });
+        }
+        if (req.method() === 'GET' && path in respuestas) {
+          return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(respuestas[path]) });
+        }
+        return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '[]' });
+      });
+      await op.goto('/salidas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(op.getByRole('button', { name: 'Despachar 1234ABC' })).toBeVisible({ timeout: 30_000 });
+      await expect(op.getByText('Bravo Soliz Javier')).toBeVisible();
+      await op.waitForTimeout(1_500);
+      expect(jornadas).toEqual([]);
+    } finally {
+      await context.close();
     }
   });
 

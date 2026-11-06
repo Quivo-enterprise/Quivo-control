@@ -5,35 +5,25 @@ import { Alert, Button, Card, ConfirmDialog, DataTable, PlateBadge, StatusBadge,
 import type { FilaSalidaPanelItem, SalidaRecientePanel } from '@quivo/shared';
 import { Clock3, History } from 'lucide-react';
 import { formatearHoraBolivia } from '../../../src/lib/en-vivo/jornadas';
-import { useJornadasHoy } from '../../../src/lib/en-vivo/use-en-vivo';
+import { usePosicionesEnVivo } from '../../../src/lib/en-vivo/use-en-vivo';
 import { useEsMovil } from '../../../src/lib/use-es-movil';
 import {
+  ESTADO_BADGE,
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
-  conductorPorVehiculo,
+  TEXTO_PROGRESO,
+  conductorPorVehiculoEnVivo,
   estadoVisualFila,
   offsetServidorMs,
-  type EstadoVisualFila,
+  type TipoAccion,
 } from '../../../src/lib/salidas/salidas.logic';
-import { CuentaFila, FilaMovil, type TipoAccion } from './fila-movil';
+import { CuentaFila, FilaMovil } from './fila-movil';
 import { mensajeError, useAccionesFila, useFilaSalida } from './use-salidas';
-
-const ESTADO_BADGE: Record<EstadoVisualFila, 'active' | 'warning' | 'idle'> = {
-  en_turno: 'active',
-  demorado: 'warning',
-  esperando: 'idle',
-};
 
 const MUTED = { color: 'var(--qv-text-secondary)', fontSize: 'var(--qv-text-sm)' } as const;
 const NUM = { fontVariantNumeric: 'tabular-nums' } as const;
 
 type Accion = { tipo: TipoAccion; item: FilaSalidaPanelItem };
-
-const TEXTO_PROGRESO: Record<TipoAccion, string> = {
-  despachar: 'Despachando…',
-  moverAlFinal: 'Moviendo…',
-  retirar: 'Retirando…',
-};
 
 const DIALOGO: Record<TipoAccion, { titulo: string; confirmar: string; mensaje: (placa: string) => string }> = {
   despachar: {
@@ -70,9 +60,10 @@ export function FilaEnVivo({
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [enCurso, setEnCurso] = useState<{ tipo: TipoAccion; id: string } | null>(null);
   const esMovil = useEsMovil();
-  // Conductor de cada trufi: jornadas de hoy (misma query que Hoy/En vivo); solo se pide en el celular.
-  const jornadas = useJornadasHoy(token, esMovil);
-  const conductores = useMemo(() => conductorPorVehiculo(jornadas.data?.vehiculos ?? []), [jornadas.data]);
+  // Conductor de cada trufi: posiciones en vivo (misma query que En vivo; las lee también `operador`, a diferencia
+  // de /reportes/jornadas, solo admin). Solo en el celular y sin el poll de 2 s del mapa: el nombre casi no cambia.
+  const posiciones = usePosicionesEnVivo(esMovil ? token : null, 30_000);
+  const conductores = useMemo(() => conductorPorVehiculoEnVivo(posiciones.data ?? []), [posiciones.data]);
 
   const data = fila.data;
   // `dataUpdatedAt` = cuándo llegó esta respuesta al navegador; con `servidorTs` da el desfase de reloj.
@@ -177,7 +168,6 @@ export function FilaEnVivo({
           </Alert>
         )}
         <DataTable<FilaSalidaPanelItem>
-          className="qv-fila-tabla"
           loading={fila.isPending}
           error={fila.isError && !data ? mensajeError(fila.error) : undefined}
           empty="No hay trufis en la fila. Aparecen apenas llegan a la terminal."
@@ -222,7 +212,6 @@ export function FilaEnVivo({
               <Button
                 size="sm"
                 variant={r.habilitado ? 'primary' : 'secondary'}
-                className="qv-fila-despachar"
                 disabled={ocupado}
                 aria-busy={progreso('despachar', r.id)}
                 aria-label={`Despachar ${r.placa}`}
