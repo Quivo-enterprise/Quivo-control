@@ -12,7 +12,7 @@ import { IconoNivel } from './panel-vehiculo';
 /** Hasta este número de líneas el filtro es un segmento; con más, un `Select` (no cabría en la barra). */
 const MAX_LINEAS_SEGMENTO = 4;
 
-const SALUD: Record<SaludRefresco['estado'], { texto: string; Icono: typeof Radio }> = {
+export const SALUD: Record<SaludRefresco['estado'], { texto: string; Icono: typeof Radio }> = {
   ok: { texto: 'En vivo', Icono: Radio },
   lento: { texto: 'Actualización lenta', Icono: Clock },
   sin_conexion: { texto: 'Sin conexión', Icono: WifiOff },

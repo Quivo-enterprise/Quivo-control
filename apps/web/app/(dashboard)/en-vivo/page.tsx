@@ -28,7 +28,7 @@ import {
   puedeActuarEnInfracciones,
   siguienteAlertaId,
 } from '../../../src/lib/en-vivo/alertas';
-import { filtrarPorEstado, ordenColaMolinos } from '../../../src/lib/en-vivo/atencion';
+import { conteoPorEstado, filtrarPorEstado, ordenColaMolinos, resumenFlota } from '../../../src/lib/en-vivo/atencion';
 import { useAdminCity } from '../../../src/lib/geo/use-admin-city';
 import { useLineaOptions } from '../../../src/lib/api/use-linea-options';
 import {
@@ -41,7 +41,9 @@ import {
   mensajeError,
   vacioSobreMapa,
 } from './map-builders';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import { BarraMando } from './barra-mando';
+import { ChipsMapa } from './chips-mapa';
 import { ModuloJornada } from './modulo-jornada';
 import { ModuloMolinos } from './modulo-molinos';
 import { PanelFlota } from './panel-flota';
@@ -61,6 +63,7 @@ export default function EnVivoPage() {
 function EnVivoContenido() {
   const { token, user, logout } = useAuth();
   const router = useRouter();
+  const esMovil = useEsMovil();
 
   // ENTREGA 13 — `posiciones` (TODOS los vehículos, `GET /reportes/en-vivo/posiciones`)
   // reemplaza al listado de sesiones (`useSesionesEnVivo`) como fuente del mapa: antes el
@@ -93,7 +96,7 @@ function EnVivoContenido() {
   // Único camino de cierre por Escape o por el fondo: cierra y devuelve el foco al botón Flota.
   const cerrarFlota = () => {
     setFlotaAbierta(false);
-    document.querySelector<HTMLElement>('.qv-live-barra__flota')?.focus();
+    document.querySelector<HTMLElement>('.qv-live-barra__flota, [data-disparador-flota]')?.focus();
   };
   const [aviso, setAviso] = useState<AvisoPanel | null>(null);
   const [focoMapa, setFocoMapa] = useState<{
@@ -132,6 +135,7 @@ function EnVivoContenido() {
     if (infraccionesHoy.data === undefined) return infraccionesHoy.isError || infraccionesHoy.errorUpdateCount > 0 ? 'error' : 'cargando';
     return infraccionesHoy.data.filter((i) => i.estado === 'abierta' && (!lineaFilter || i.lineaId === lineaFilter)).length;
   }, [infraccionesHoy.data, infraccionesHoy.isError, infraccionesHoy.errorUpdateCount, lineaFilter]);
+  const flota = useMemo(() => resumenFlota(conteoPorEstado(posicionesDeLinea)), [posicionesDeLinea]);
   const posicionesFiltradas = useMemo(
     () =>
       filtrarPorEstado(
@@ -466,7 +470,7 @@ function EnVivoContenido() {
     // En móvil (<= 720 px) la hoja inferior tapa el centro del mapa: la cámara se corre para que el
     // punto caiga en el centro de la franja visible, entre la barra de mando y la hoja.
     const hoja = document.querySelector<HTMLElement>('.qv-live-cajon');
-    const hud = document.querySelector<HTMLElement>('.qv-live-barra');
+    const hud = document.querySelector<HTMLElement>('.qv-live-barra, .qv-chips-mapa');
     const mapa = mapaRef.current?.querySelector<HTMLElement>('.qv-live-mapa');
     let offsetY = 0;
     if (hoja && mapa && window.matchMedia('(max-width: 720px)').matches) {
@@ -575,7 +579,7 @@ function EnVivoContenido() {
 
   return (
     <div className="qv-live-map-wrapper" ref={mapaRef} tabIndex={-1}>
-      {hayBarra && (
+      {hayBarra && !esMovil && (
         <BarraMando
           consulta={{ dataUpdatedAt: posiciones.dataUpdatedAt, isError: posiciones.isError }}
           tienePanelAdmin={tienePanelAdmin}
@@ -710,7 +714,7 @@ function EnVivoContenido() {
           )}
 
           {/* Controles del mapa (la frescura del vehículo seleccionado vive en su panel) */}
-          {hayHud && (
+          {hayHud && !esMovil && (
             <div className="qv-live-controles" role="group" aria-label="Controles del mapa">
               <button
                 type="button"
@@ -855,6 +859,37 @@ function EnVivoContenido() {
             )}
           </div>
         </div>
+
+        {/* Móvil: chips flotantes (línea, ⋯ con Flota/Días/alertas/Seguir/Ampliar/Refrescar, salud). Van fuera de
+        `.qv-live-mapa` (aísla su z-index) para que los menús abiertos queden sobre el cajón del vehículo. */}
+        {hayBarra && esMovil && (
+          <ChipsMapa
+            consulta={{ dataUpdatedAt: posiciones.dataUpdatedAt, isError: posiciones.isError }}
+            enServicio={flota.enServicio}
+            total={flota.total}
+            lineas={lineas}
+            lineaOptions={lineaOptions}
+            lineaFilter={lineaFilter}
+            onLinea={setLineaFilter}
+            puedeVerDias={puedeVerDias}
+            onDias={() => router.push('/reportes/recorridos')}
+            hayHud={hayHud}
+            onToggleFlota={() => setFlotaAbierta((v) => !v)}
+            seguir={seguir}
+            puedeSeguir={puedeSeguir}
+            onSeguir={alternarSeguir}
+            onAmpliar={() => setFitKeyOverride((v) => v + 1)}
+            onRefrescar={() => void handleManualRefresh()}
+            conteoNiveles={conteoNiveles}
+            nivelFiltro={nivelFiltro}
+            onNivel={setNivelFiltro}
+            alertasPendientes={alertasOrdenadas.length}
+            alertasEnMapa={alertasEnMapa}
+            abiertasHoy={abiertasHoy}
+            puedeVerAlertas={user ? isRouteAllowedForRole(NAV_ITEMS, '/alertas', user.rol) : false}
+            onSiguienteAlerta={irASiguienteAlerta}
+          />
+        )}
 
         {/* CAJÓN DEL VEHÍCULO (cabecera, acciones rápidas, infracciones, PCs y stats): columna de
         372 px a la derecha en escritorio; flota sobre el mapa en tablet y es hoja inferior en
