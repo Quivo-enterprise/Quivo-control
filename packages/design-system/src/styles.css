@@ -6124,7 +6124,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 /* Diseño B — placa y primitivas. Solo <= 720 px, escritorio no cambia. */
 @media (max-width: 720px) {
-  /* Placa de la señalética: Oxanium, borde tinta, sin banda "BOL" ni azul (comp .plate). */
+  /* Placa de la señalética: fuente display (Oxanium en apps/web), borde tinta, sin banda "BOL" ni azul (comp .plate). */
   .qv-plate {
     display: inline-block;
     height: auto;
@@ -6186,7 +6186,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Botón de 52 px con borde grueso (comp .btn). `sm` y los botones con alto propio (tabla apilada, base rápida) no se inflan. */
+  /* Botón de 52 px con borde grueso (comp .btn). `sm`, las acciones de fila y los botones de icono de la tabla apilada no son `md` y no cambian; el −/+ y Guardar de base rápida sí (52×48, sin desborde a 360 px). */
   .qv-button--md {
     min-height: 3.25rem;
     padding-inline: 14px;
@@ -6204,7 +6204,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-button--md.qv-button--secondary {
     background: var(--qv-surface-card);
     color: var(--qv-text-primary);
-    border-color: var(--qv-border-strong);
+  }
+
+  /* Gana al hover base (azul) que en táctil queda pegado tras el toque. */
+  .qv-button--md.qv-button--secondary:not(:disabled):hover {
+    background: var(--qv-surface-soft);
   }
 
   .qv-button--md.qv-button--ghost {
@@ -6236,12 +6240,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   .qv-status-badge--active {
-    background: transparent;
     color: var(--qv-estado-reportando-texto);
   }
 
   .qv-status-badge--warning {
-    background: transparent;
     color: var(--qv-estado-en-pausa-texto);
   }
 
@@ -6251,7 +6253,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   .qv-status-badge--canceled {
-    background: transparent;
     color: var(--qv-estado-perdido-texto);
   }
 
@@ -6260,12 +6261,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   /* Estados neutros: círculo hueco, distinto del punto relleno de "activo". */
-  .qv-status-badge--inactive,
-  .qv-status-badge--idle,
-  .qv-status-badge--pending {
-    background: transparent;
-  }
-
   .qv-status-badge--inactive .qv-status-badge__dot,
   .qv-status-badge--idle .qv-status-badge__dot,
   .qv-status-badge--pending .qv-status-badge__dot {

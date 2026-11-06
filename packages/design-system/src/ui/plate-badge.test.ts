@@ -12,8 +12,7 @@ describe('PlateBadge', () => {
   });
 
   it('size="lg" agrega el modificador y conserva className', () => {
-    const html = renderToStaticMarkup(createElement(PlateBadge, { plate: '4701EHA', size: 'lg', className: 'x' }));
-    expect(html).toContain('qv-plate--lg');
-    expect(html).toContain('x');
+    const html = renderToStaticMarkup(createElement(PlateBadge, { plate: '4701EHA', size: 'lg', className: 'extra-clase' }));
+    expect(html).toContain('class="qv-plate qv-plate--lg extra-clase"');
   });
 });
