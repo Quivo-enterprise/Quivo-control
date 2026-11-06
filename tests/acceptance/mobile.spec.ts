@@ -6,6 +6,15 @@ import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
 const ADMIN = { email: 'admin@quivo.local', password: 'Quivo123!' };
 
+// Ítems de la página Más por rol (orden de NAV_ITEMS, sin las pestañas ni Dashboard).
+const ETIQUETAS_MAS = {
+  admin_quivo: ['Sindicatos', 'Socios', 'Vehículos', 'Conductores', 'Líneas', 'Rutas', 'Rotaciones', 'Reglas y sanciones', 'Reportes', 'Auditoría', 'Errores de sync', 'Usuarios'],
+  admin_sindicato: ['Socios', 'Vehículos', 'Conductores', 'Líneas', 'Rutas', 'Rotaciones', 'Reglas y sanciones', 'Reportes', 'Auditoría', 'Errores de sync'],
+};
+
+// El texto de cada fila incluye el tag "Solo lectura" de Rutas.
+const conTag = (etiquetas: string[]) => etiquetas.map((e) => new RegExp(`^${e}(Solo lectura)?$`));
+
 // /en-vivo y /rutas se cubren en PR B/C. El admin_quivo ve todo lo demás.
 const ROUTES = NAV_ITEMS.filter(
   (i) => i.roles.includes('admin_quivo') && !['/en-vivo', '/rutas'].includes(i.href),
@@ -66,32 +75,61 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
-  test('drawer de navegación', async () => {
-    const burger = page.getByRole('button', { name: 'Más', exact: true });
-    const nav = page.getByRole('navigation', { name: 'Navegación principal' });
-    await expect(burger).toBeVisible();
+  test('Más: página, no drawer; lista de admin_quivo y activa en una ruta secundaria', async () => {
+    await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
+    const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
+    const mas = tabbar.getByRole('link', { name: 'Más', exact: true });
+    await expect(mas).toHaveAttribute('href', '/mas');
+    await expect(mas).not.toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('button', { name: 'Más', exact: true })).toHaveCount(0);
 
-    await burger.click();
-    await expect(burger).toHaveAttribute('aria-expanded', 'true');
-    await expect(nav.getByRole('link', { name: 'Vehículos' })).toBeVisible();
+    await mas.click();
+    await expect(page).toHaveURL(/\/mas\/?$/, { timeout: 30_000 });
+    await expect(mas).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Más', level: 1 })).toBeVisible();
+    await expect(page.locator('.qv-mas-user__name')).toHaveText(ADMIN.email);
+    await expect(page.locator('.qv-mas-user__meta')).toHaveText('Administrador QUIVO');
+    // El drawer no se abre desde ningún lado: la sidebar sigue fuera de pantalla.
+    await expect(page.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeHidden();
+    await expect(page.locator('.qv-mas-list__link')).toHaveText(conTag(ETIQUETAS_MAS.admin_quivo));
+    // /rutas es solo lectura en celular (ver test "Rutas: solo lectura en celular").
+    await expect(page.locator('.qv-mas-list__tag')).toHaveText(['Solo lectura']);
+    await expect(page.locator('.qv-mas-list__link', { hasText: 'Rutas' }).locator('.qv-mas-list__tag')).toBeVisible();
+    for (const el of await page.locator('.qv-mas-list__link').all()) {
+      expect((await el.boundingBox())!.height).toBeGreaterThanOrEqual(52);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
-    await page.keyboard.press('Escape');
-    await expect(burger).toHaveAttribute('aria-expanded', 'false');
-    await expect(burger).toBeFocused();
-
-    await burger.click();
-    await expect(burger).toHaveAttribute('aria-expanded', 'true');
-    const width = await page.evaluate(() => window.innerWidth);
-    await page.mouse.click(width - 10, 300);
-    await expect(burger).toHaveAttribute('aria-expanded', 'false');
-
-    await burger.click();
-    await nav.getByRole('link', { name: 'Vehículos' }).click();
+    await page.locator('.qv-mas-list__link', { hasText: 'Vehículos' }).click();
     await expect(page).toHaveURL(/\/vehiculos\/?$/, { timeout: 30_000 });
-    await expect(burger).toHaveAttribute('aria-expanded', 'false');
+    // Desde Más se llega a Vehículos: la pestaña activa sigue siendo Más y ninguna otra.
+    await expect(mas).toHaveAttribute('aria-current', 'page');
+    await expect(tabbar.locator('[aria-current="page"]')).toHaveCount(1);
   });
 
-  test('tabbar: visible, Más abre el drawer y Salidas navega', async () => {
+  test('vehículos: el botón flotante no tapa las acciones de la última fila', async () => {
+    await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
+    const historial = page.getByRole('button', { name: /^Ver historial de / }).last();
+    await expect(historial).toBeAttached({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Nuevo vehículo' })).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    for (const nombre of [/^Ver detalles de /, /^Editar$/, /^Cambiar estado de /, /^Ver historial de /]) {
+      const accion = page.getByRole('button', { name: nombre }).last();
+      await accion.scrollIntoViewIfNeeded();
+      const box = (await accion.boundingBox())!;
+      const encima = await accion.evaluate((el, [x, y]) => {
+        const top = document.elementFromPoint(x, y);
+        return top === el || el.contains(top);
+      }, [box.x + box.width / 2, box.y + box.height / 2]);
+      expect(encima, `${nombre} tapado`).toBe(true);
+    }
+    // En el fondo de la página la última acción termina sobre el botón flotante, no debajo de él.
+    const fab = (await page.getByRole('button', { name: 'Nuevo vehículo' }).boundingBox())!;
+    const ultima = (await historial.boundingBox())!;
+    expect(ultima.y + ultima.height, 'la última fila queda tapada por el FAB').toBeLessThanOrEqual(fab.y + 1);
+  });
+
+  test('tabbar: visible, 44 px mínimo y Salidas navega', async () => {
     await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
     const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
     await expect(tabbar).toBeVisible();
@@ -104,10 +142,6 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const bar = (await tabbar.boundingBox())!;
     expect(Math.round(bar.y + bar.height)).toBe(viewport.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-
-    await tabbar.getByRole('button', { name: 'Más' }).click();
-    await expect(page.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeVisible();
-    await page.keyboard.press('Escape');
 
     await tabbar.getByRole('link', { name: 'Salidas' }).click();
     await expect(page).toHaveURL(/\/salidas\/?$/, { timeout: 30_000 });
@@ -767,9 +801,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const shellBox = (await page.locator('.qv-live-standalone-shell').boundingBox())!;
     expect(shellBox.y + shellBox.height, 'la pantalla En vivo no debe pisar la tabbar').toBeLessThanOrEqual(tabbarBox.y + 1);
     await expect(page.locator('.qv-live-barra__salir')).toBeHidden(); // Salir/Panel viven en Más y Hoy
-    await tabbar.getByRole('button', { name: 'Más' }).click();
-    await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeVisible();
-    await page.keyboard.press('Escape');
+    await expect(tabbar.getByRole('link', { name: 'Más', exact: true })).toHaveAttribute('href', '/mas'); // Salir/Panel viven en Más y Hoy
     expect((await barra.boundingBox())!.height).toBeLessThanOrEqual(120); // 2 filas: ~112 px medidos a 412 px con base de 16 px
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
@@ -1370,5 +1402,82 @@ test.describe('Panel móvil (Pixel 7)', () => {
       for (const [patron] of rutas) await page.unroute(patron);
       await page.unroute('**/v1/sanciones*');
     }
+  });
+});
+
+// Sin login real (el API limita a 5/min): la sesión se siembra en localStorage y el API se simula vacío.
+async function paginaConSesion(browser: import('@playwright/test').Browser, baseURL: string | undefined, rol: string, viewport?: { width: number; height: number }) {
+  const context = await browser.newContext({ ...devices['Pixel 7'], ...(viewport && { viewport }), baseURL });
+  await context.addInitScript(
+    (r) => {
+      if (!window.localStorage.getItem('quivo.session')) {
+        window.localStorage.setItem('quivo.session', JSON.stringify({ user: { id: 'u1', email: `${r}@quivo.local`, rol: r, sindicatoId: null }, token: 'opaco', refreshToken: null }));
+      }
+    },
+    rol,
+  );
+  await context.route('**/v1/**', (route) => route.fulfill({ json: [] }));
+  return { context, page: await context.newPage() };
+}
+
+test.describe('Más por rol (sesión simulada)', () => {
+  test('admin_sindicato: 10 ítems, sin Sindicatos ni Usuarios', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_sindicato');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p.locator('.qv-mas-list__link')).toHaveText(conTag(ETIQUETAS_MAS.admin_sindicato));
+    await expect(p.locator('.qv-mas-user__meta')).toHaveText('Administrador de sindicato');
+    await context.close();
+  });
+
+  test('operador: solo tarjeta de usuario y Cerrar sesión, sin lista; Más no es su aterrizaje', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'operador');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p.getByRole('heading', { name: 'Más', level: 1 })).toBeVisible();
+    await expect(p.locator('.qv-mas-list')).toHaveCount(0);
+    await expect(p.locator('.qv-mas-user__meta')).toHaveText('Operador');
+    await expect(p.getByRole('button', { name: 'Cerrar sesión' })).toBeVisible();
+    const tabbar = p.getByRole('navigation', { name: 'Pestañas', exact: true });
+    await expect(tabbar.getByRole('link')).toHaveText(['En vivo', 'Salidas', 'Más']);
+    await expect(tabbar.getByRole('link', { name: 'Más', exact: true })).toHaveAttribute('aria-current', 'page');
+    // Aterrizaje: la raíz lo manda a En vivo, no a Más.
+    await p.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(p).toHaveURL(/\/en-vivo\/?$/, { timeout: 30_000 });
+    await context.close();
+  });
+
+  test('escritorio: /mas redirige a / y la sidebar sigue', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_quivo', { width: 1440, height: 900 });
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p).toHaveURL(/\/$/, { timeout: 30_000 });
+    await expect(p.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeVisible();
+    await expect(p.getByRole('navigation', { name: 'Pestañas', exact: true })).toBeHidden();
+    await context.close();
+  });
+
+  test('escritorio: /mas del operador redirige directo a /en-vivo', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'operador', { width: 1440, height: 900 });
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p).toHaveURL(/\/en-vivo\/?$/, { timeout: 30_000 });
+    await context.close();
+  });
+
+  test('girar el celular (915x412) no saca al usuario de /mas', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p.locator('.qv-mas-list')).toBeVisible({ timeout: 30_000 });
+    await p.setViewportSize({ width: 915, height: 412 });
+    await p.waitForTimeout(1000);
+    await expect(p).toHaveURL(/\/mas\/?$/);
+    await expect(p.locator('.qv-mas-list')).toBeVisible();
+    await context.close();
+  });
+
+  test('Cerrar sesión: cierra la sesión y va a /login', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_quivo');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await p.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await expect(p).toHaveURL(/\/login\/?$/, { timeout: 30_000 });
+    expect(await p.evaluate(() => window.localStorage.getItem('quivo.session'))).toBeNull();
+    await context.close();
   });
 });

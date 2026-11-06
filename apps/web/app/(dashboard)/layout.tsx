@@ -10,75 +10,15 @@ import {
   type MobileTab,
   type SidebarNavSection,
 } from '@quivo/design-system';
-import {
-  AlertTriangle,
-  Building2,
-  Bell,
-  Bus,
-  FileBarChart,
-  GitBranch,
-  House,
-  LayoutDashboard,
-  LogOut,
-  MapPin,
-  ListOrdered,
-  Radio,
-  RotateCw,
-  Scale,
-  ShieldAlert,
-  Sparkles,
-  UserCheck,
-  UserCog,
-  Users,
-} from 'lucide-react';
+import { Ellipsis, LogOut } from 'lucide-react';
 import { BrandLogo } from '../../src/components/brand-logo';
 import { RequireAuth } from '../../src/components/require-auth';
+import { getNavIcon } from '../../src/lib/nav-icons';
 import { useAuth } from '../../src/lib/auth/auth-context';
-import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, isRouteAllowedForRole, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
+import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, isRouteAllowedForRole, masActivo, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
 import { textoAlertasAbiertas } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy } from '../../src/lib/en-vivo/use-en-vivo';
 import { useEsMovil } from '../../src/lib/use-es-movil';
-
-function getNavIcon(iconName?: string, size = 18, strokeWidth = 1.9) {
-  switch (iconName) {
-    case 'House':
-      return <House size={size} strokeWidth={strokeWidth} />;
-    case 'Bell':
-      return <Bell size={size} strokeWidth={strokeWidth} />;
-    case 'LayoutDashboard':
-      return <LayoutDashboard size={size} strokeWidth={strokeWidth} />;
-    case 'ListOrdered':
-      return <ListOrdered size={size} strokeWidth={strokeWidth} />;
-    case 'Radio':
-      return <Radio size={size} strokeWidth={strokeWidth} />;
-    case 'Building2':
-      return <Building2 size={size} strokeWidth={strokeWidth} />;
-    case 'Users':
-      return <Users size={size} strokeWidth={strokeWidth} />;
-    case 'Bus':
-      return <Bus size={size} strokeWidth={strokeWidth} />;
-    case 'UserCheck':
-      return <UserCheck size={size} strokeWidth={strokeWidth} />;
-    case 'GitBranch':
-      return <GitBranch size={size} strokeWidth={strokeWidth} />;
-    case 'MapPin':
-      return <MapPin size={size} strokeWidth={strokeWidth} />;
-    case 'RotateCw':
-      return <RotateCw size={size} strokeWidth={strokeWidth} />;
-    case 'Scale':
-      return <Scale size={size} strokeWidth={strokeWidth} />;
-    case 'FileBarChart':
-      return <FileBarChart size={size} strokeWidth={strokeWidth} />;
-    case 'ShieldAlert':
-      return <ShieldAlert size={size} strokeWidth={strokeWidth} />;
-    case 'AlertTriangle':
-      return <AlertTriangle size={size} strokeWidth={strokeWidth} />;
-    case 'UserCog':
-      return <UserCog size={size} strokeWidth={strokeWidth} />;
-    default:
-      return <Sparkles size={size} strokeWidth={strokeWidth} />;
-  }
-}
 
 function DashboardShell({ children }: { children: ReactNode }) {
   const { user, token, logout, isDevBypass, switchDevBypassRole } = useAuth();
@@ -158,20 +98,29 @@ function DashboardShell({ children }: { children: ReactNode }) {
     router.push('/login');
   };
 
-  const mobileTabs: MobileTab[] = filterNavItemsByRole(MOBILE_TAB_ITEMS, user?.rol ?? '').map((item) => ({
+  // Solo clic izquierdo simple: Ctrl/Cmd/Shift/Alt y clic medio conservan el comportamiento del navegador.
+  const irA = (href: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    router.push(href);
+  };
+
+  const mobileTabs: MobileTab[] = [...filterNavItemsByRole(MOBILE_TAB_ITEMS, user?.rol ?? '').map((item) => ({
     id: item.id,
     label: item.label,
     href: item.href,
     icon: getNavIcon(item.iconName, 24, 2),
     active: isNavActive(pathname, item.href),
     ...(item.id === 'alertas' && { badge: abiertas, badgeLabel: textoAlertasAbiertas(abiertas) }),
-    onClick: (event) => {
-      // Solo clic izquierdo simple: Ctrl/Cmd/Shift/Alt y clic medio conservan el comportamiento del navegador.
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      router.push(item.href);
-    },
-  }));
+    onClick: irA(item.href),
+  })), {
+    id: 'mas',
+    label: 'Más',
+    href: '/mas',
+    icon: <Ellipsis size={24} strokeWidth={2} />,
+    active: masActivo(pathname, user?.rol ?? ''),
+    onClick: irA('/mas'),
+  }];
 
   const activeItem = sections.flatMap((s) => s.items).find((i) => i.active);
 
@@ -179,7 +128,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
 
   return (
     <AdminLayout
-      // '/en-vivo' va a pantalla completa sin sidebar en escritorio: `bare` deja solo drawer + tabbar en móvil.
+      // '/en-vivo' va a pantalla completa sin sidebar en escritorio: `bare` deja solo la tabbar en móvil.
       bare={isLive}
       mobileTabs={mobileTabs}
       // En móvil la home se llama "Hoy" (pestaña y encabezado); en escritorio sigue "Dashboard".

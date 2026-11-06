@@ -157,6 +157,17 @@ export const MOBILE_TAB_ITEMS: NavItem[] = [
   { id: 'alertas', label: 'Alertas', href: '/alertas', roles: rolesDe('alertas'), iconName: 'Bell' },
 ];
 
+/** Ítems de la página "Más" para un rol: sus ítems de navegación menos los que ya son pestañas (y Dashboard, que es Hoy). */
+export function itemsParaMas(rol: string): NavItem[] {
+  const hrefsPestana = new Set(MOBILE_TAB_ITEMS.map((i) => i.href));
+  return filterNavItemsByRole(NAV_ITEMS, rol).filter((i) => !hrefsPestana.has(i.href));
+}
+
+/** "Más" está activa en `/mas` y en cualquier ruta que no sea una de las pestañas visibles del rol (se llega a ella desde Más). */
+export function masActivo(pathname: string, rol: string): boolean {
+  return pathname === '/mas' || !filterNavItemsByRole(MOBILE_TAB_ITEMS, rol).some((i) => isNavActive(pathname, i.href));
+}
+
 /** `true` si `href` es la ruta actual o un ancestro de ella (`/` solo coincide exacto). */
 export function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || (href !== '/' && pathname.startsWith(`${href}/`));

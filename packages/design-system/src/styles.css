@@ -6892,3 +6892,125 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     --qm-sobre-danger: #2a0a0a;
   }
 }
+
+/* PR 7 — página "Más" del celular (comp .user / .av / .list / .li / .ico / .tag / .btn.out). */
+.qv-mas-user {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+}
+
+.qv-mas-user__av {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  background: var(--qv-color-primary);
+  color: #fff;
+  font: 800 22px var(--qv-font-display);
+}
+
+.qv-mas-user__name {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.qv-mas-user__meta {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--qv-text-secondary);
+}
+
+.qv-mas-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  background: var(--qv-surface-card);
+  border: 1.5px solid var(--qv-border-subtle);
+  border-radius: 18px;
+}
+
+.qv-mas-list li + li {
+  border-top: 1px solid var(--qv-border-subtle);
+}
+
+.qv-mas-list__link {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 14px;
+  color: var(--qv-text-primary);
+  font-weight: 700;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.qv-mas-list__link:active {
+  background: var(--qv-surface-soft);
+}
+
+.qv-mas-list__link:focus-visible {
+  outline: 3px solid var(--qv-color-primary);
+  outline-offset: -3px;
+}
+
+.qv-mas-list__ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--qv-color-primary-subtle);
+  color: var(--qv-color-primary);
+}
+
+.qv-mas-list__go {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 13.5px;
+  color: var(--qv-text-secondary);
+}
+
+.qv-mas-list__tag {
+  padding: 1px 8px;
+  border: 1.5px solid var(--qv-border-strong);
+  border-radius: 8px;
+  background: var(--qv-surface-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.qv-mas-logout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  margin-top: 12px;
+  border: 1.5px solid var(--qv-color-danger);
+  border-radius: 14px;
+  background: var(--qv-surface-card);
+  color: var(--qv-estado-perdido-texto);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.qv-mas-logout:focus-visible {
+  outline: 3px solid var(--qv-color-primary);
+  outline-offset: 2px;
+}

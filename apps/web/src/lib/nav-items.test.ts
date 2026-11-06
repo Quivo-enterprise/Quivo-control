@@ -4,6 +4,8 @@ import {
   findNavItemForPath,
   isNavActive,
   isRouteAllowedForRole,
+  itemsParaMas,
+  masActivo,
   NAV_ITEMS,
   rutaInicialParaRol,
 } from './nav-items.js';
@@ -113,5 +115,51 @@ describe('isNavActive', () => {
     expect(isNavActive('/salidas', '/')).toBe(false);
     expect(isNavActive('/salidas/x', '/salidas')).toBe(true);
     expect(isNavActive('/salidas', '/sal')).toBe(false);
+  });
+});
+
+describe('itemsParaMas (página Más del celular)', () => {
+  it('admin_quivo: 12 ítems en orden de NAV_ITEMS, con Sindicatos, Errores de sync y Usuarios', () => {
+    const ids = itemsParaMas('admin_quivo').map((i) => i.id);
+    expect(ids).toEqual(['sindicatos', 'socios', 'vehiculos', 'conductores', 'lineas', 'rutas', 'rotaciones', 'reglas', 'reportes', 'auditoria', 'sync-errores', 'usuarios']);
+  });
+
+  it('admin_sindicato: 10 ítems, sin Sindicatos ni Usuarios', () => {
+    const ids = itemsParaMas('admin_sindicato').map((i) => i.id);
+    expect(ids).toHaveLength(10);
+    expect(ids).toContain('sync-errores');
+    expect(ids).not.toContain('sindicatos');
+    expect(ids).not.toContain('usuarios');
+  });
+
+  it('operador y roles desconocidos: ninguno (En vivo y Salidas son pestañas)', () => {
+    expect(itemsParaMas('operador')).toEqual([]);
+    expect(itemsParaMas('rol_inexistente')).toEqual([]);
+  });
+
+  it('nunca repite una pestaña ni el Dashboard', () => {
+    for (const rol of ['admin_quivo', 'admin_sindicato']) {
+      const hrefs = itemsParaMas(rol).map((i) => i.href);
+      for (const h of ['/', '/en-vivo', '/salidas', '/alertas']) expect(hrefs).not.toContain(h);
+    }
+  });
+
+  it('/mas no es el aterrizaje de ningún rol', () => {
+    for (const rol of ['admin_quivo', 'admin_sindicato', 'operador']) {
+      expect(rutaInicialParaRol(NAV_ITEMS, rol)).not.toBe('/mas');
+    }
+  });
+});
+
+describe('masActivo', () => {
+  it('activa en /mas y en rutas que no son pestañas', () => {
+    expect(masActivo('/mas', 'admin_quivo')).toBe(true);
+    expect(masActivo('/vehiculos', 'admin_quivo')).toBe(true);
+    expect(masActivo('/vehiculos/123', 'admin_sindicato')).toBe(true);
+  });
+
+  it('inactiva en las pestañas visibles', () => {
+    for (const p of ['/', '/en-vivo', '/salidas', '/alertas']) expect(masActivo(p, 'admin_quivo')).toBe(false);
+    expect(masActivo('/salidas', 'operador')).toBe(false);
   });
 });

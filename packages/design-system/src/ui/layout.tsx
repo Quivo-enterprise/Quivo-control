@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { cx } from '../utils.js';
 import { Alert, Button } from './primitives.js';
 import { Input } from './form.js';
@@ -17,9 +17,9 @@ export interface AdminLayoutProps {
   mobileTitle?: string;
   /** Cambia con la ruta (p. ej. `pathname`): cierra el drawer móvil. */
   routeKey?: string;
-  /** Pestañas inferiores móviles (≤720px); la última, "Más", abre el drawer y reemplaza a la hamburguesa. */
+  /** Pestañas inferiores móviles (≤720px); reemplazan a la hamburguesa y el drawer no se abre ("Más" es una pestaña más, una página). */
   mobileTabs?: MobileTab[];
-  /** Sin topbar/header/contenido: solo drawer + pestañas alrededor de `children` (pantalla completa, p. ej. En vivo). En escritorio no se ve. Requiere `mobileTabs`: sin ellas en móvil no hay cómo abrir el drawer (el design system no lee `process.env`, por eso no hay warning en dev). */
+  /** Sin topbar/header/contenido: solo pestañas alrededor de `children` (pantalla completa, p. ej. En vivo). En escritorio no se ve. Requiere `mobileTabs`: sin ellas en móvil no hay navegación (el design system no lee `process.env`, por eso no hay warning en dev). */
   bare?: boolean;
 }
 
@@ -38,14 +38,10 @@ export interface MobileTab {
 
 export interface MobileTabBarProps {
   tabs: MobileTab[];
-  drawerId: string;
-  moreOpen: boolean;
-  onMore: () => void;
-  moreRef?: Ref<HTMLButtonElement>;
 }
 
 /** Barra inferior solo-móvil (CSS la oculta en escritorio). */
-export function MobileTabBar({ tabs, drawerId, moreOpen, onMore, moreRef }: MobileTabBarProps) {
+export function MobileTabBar({ tabs }: MobileTabBarProps) {
   return (
     <nav className="qv-tabbar" aria-label="Pestañas">
       {tabs.map((tab) => (
@@ -66,21 +62,6 @@ export function MobileTabBar({ tabs, drawerId, moreOpen, onMore, moreRef }: Mobi
           ) : null}
         </a>
       ))}
-      <button
-        ref={moreRef}
-        type="button"
-        className="qv-tabbar__tab"
-        aria-expanded={moreOpen}
-        aria-controls={drawerId}
-        onClick={onMore}
-      >
-        <span className="qv-tabbar__pill" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" />
-          </svg>
-        </span>
-        Más
-      </button>
     </nav>
   );
 }
@@ -186,13 +167,7 @@ export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey, 
           </>
         )}
         {mobileTabs && (
-          <MobileTabBar
-            tabs={mobileTabs}
-            drawerId={drawerId}
-            moreOpen={navOpen}
-            onMore={() => setNavOpen(true)}
-            moreRef={toggleRef}
-          />
+          <MobileTabBar tabs={mobileTabs} />
         )}
       </div>
     </div>
@@ -203,7 +178,7 @@ export function AdminLayout({ sidebar, header, children, mobileTitle, routeKey, 
  * SidebarNav
  * ------------------------------------------------------------------------------------- */
 
-const ROLE_LABEL: Record<string, string> = {
+export const ROLE_LABEL: Record<string, string> = {
   admin_quivo: 'Administrador QUIVO',
   admin_sindicato: 'Administrador de sindicato',
   operador: 'Operador',
