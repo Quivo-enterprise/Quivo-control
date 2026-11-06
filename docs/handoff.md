@@ -171,12 +171,22 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - **Error corregido:** la primera carga tomó conductores de fechas futuras de `sdasd` (reparto al azar) y dejó 38 de 41 pares mal unos minutos. Se corrigieron contra la última asignación hasta el 5/11; verificado por la API (0 pares mal).
     - **Verificado:** login 200 a las 10:00:27Z y sesión de 4745HGH visible en `/reportes/en-vivo/posiciones`. El resto de los choferes no se había visto entrar al escribir esto.
     - **Trampa del script:** `crear-piloto-linea-16.ts` aborta si otra rotación tiene asignaciones de esos vehículos en el rango. Con `sdasd` publicada no sirve hasta resolverla. Y para copiar pares vehículo-conductor nunca usar "la última asignación" sin tope de fecha.
+    - **Resuelto el 6/11:** `sdasd` quedó anulada y sin asignaciones (a pedido del CTO). Sigue listada como borrador vacío porque la API no borra rotaciones. 1616PIG entró con su chofer habitual en `linea-16-20261106-b`.
     - **Pendiente, decisión del CTO:**
-      - `sdasd` (creada y publicada desde el panel el 6/11) tiene asignaciones hasta el 10/11 con conductores al azar. Esos autos fallan con su chofer habitual esos días, y ocupa el cupo vehículo-fecha-turno.
-      - 1616PIG no entró en la rotación nueva: tiene mañana en `sdasd` con otro conductor, así que su chofer habitual no entra hoy.
+      - **Desde el 7/11 no hay asignaciones de la Línea 16:** hace falta una rotación por día o extender el rango. Sin eso vuelve el 409.
       - Autos de prueba 9001TST, 9002TST, 9004TST, 9005TST y 9006TST quedaron en la rotación por el pedido de "todos los autos". No afectan a los choferes reales: el login filtra por vehículo y conductor. Sacarlos exige anular la rotación, con login caído unos segundos: no se hizo con los choferes saliendo.
-      - **Desde el 7/11 no hay asignaciones de la Línea 16 fuera de `sdasd`:** hace falta una rotación por día o extender el rango.
     - **Delegado (admin_sindicato) sigue sin probarse con su cuenta:** no hay credenciales suyas en esta máquina. Hay 1 solo sindicato y En vivo filtra solo por sindicato, así que debería ver lo mismo que admin_quivo.
+  - **QA del diseño B con datos reales y modo oscuro (6/11, mañana).**
+    - **El CTO vio el panel viejo en su celular:** Chrome tenía "Sitio de escritorio" activado (UA `X11; Linux x86_64`, viewport ~980 px). Al desmarcarlo se ve el diseño B. El diseño solo aplica hasta 720 px.
+    - **Primer dispositivo físico:** Android del CTO, Chrome, modo oscuro, En vivo. Con 4745HGH reportando se vieron en prod la píldora sobre Google Maps y la hoja (km/h, foto, designación, recorrido), a 412 px en Playwright.
+    - **Método de QA sin escribir en prod:** Playwright altera respuestas solo en su navegador y bloquea todo POST/PUT/PATCH/DELETE al API. Con eso se vieron 6 estados de píldora, la fila con `conductorNombre` y alertas, con datos ficticios. No se vio una fila real.
+    - **Modo oscuro roto en r39, corregido en este PR:** textos sin `color` heredaban negro (1,12:1) porque `body` no declaraba color: título de alerta, cuenta regresiva de la fila, usuario en Más y nombre en la búsqueda de Hoy. El cálculo de contraste de #326 no lo vio porque solo miró tokens; hace falta medir en navegador.
+    - **Cambios del PR:** `body` con `--qv-text-primary`; `html` con `color-scheme: light dark` y fondo del tema; texto sobre primario y rojo con `--qv-color-on-primary`; primario oscuro `#6e79f6` global (tokens y paleta JS del mapa); hover del primario aclara en oscuro; rótulos de puntos de control numerados ocultos a ≤720 (Espera Molinos y pines de "Ver en mapa" los conservan); tile Hoy de la hoja solo "Vuelta N".
+    - **Medido:** barrido de contraste en navegador, móvil oscuro y claro, 0 textos bajo 4,5:1 en Hoy, Alertas, Más, En vivo, hoja, menús y Salidas.
+    - **Sin confirmar:** que la banda blanca bajo las pestañas venga del lienzo. Es hipótesis; se valida en el celular real tras el deploy.
+    - **Pendiente, escritorio oscuro y claro (fuera del plan móvil):** `--qv-text-muted` ronda 3,7–4,3:1; avatar del sidebar blanco sobre primario 3,67:1 (antes 3,97); un badge blanco a 1,67:1 en `/`; `.qv-button--accent` falla en ambos temas (2,08 y 1,73); `.qv-btn--elevated` y `.qv-floating-cta` no tienen un color de texto que pase en todo el degradado.
+    - **Xiaomi con Chrome 95 (M2102J20SG):** abrió En vivo desde otra IP. Tailwind 4 pide Chrome 111+ y el CSS usa `color-mix`, `:has` y `@layer`. No se probó cómo se ve ni de quién es.
+    - Gates: `/code-review` medium (10 hallazgos: 8 aplicados o cubiertos; descartados el tile sin variante mientras carga y un token nuevo para rojo) y `/ponytail-review` (2, aplicados). **Codex: no verificado (sin cuota).**
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
