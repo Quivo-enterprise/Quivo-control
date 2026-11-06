@@ -187,6 +187,10 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - **Pendiente, escritorio oscuro y claro (fuera del plan móvil):** `--qv-text-muted` ronda 3,7–4,3:1; avatar del sidebar blanco sobre primario 3,67:1 (antes 3,97); un badge blanco a 1,67:1 en `/`; `.qv-button--accent` falla en ambos temas (2,08 y 1,73); `.qv-btn--elevated` y `.qv-floating-cta` no tienen un color de texto que pase en todo el degradado.
     - **Xiaomi con Chrome 95 (M2102J20SG):** abrió En vivo desde otra IP. Tailwind 4 pide Chrome 111+ y el CSS usa `color-mix`, `:has` y `@layer`. No se probó cómo se ve ni de quién es.
     - Gates: `/code-review` medium (10 hallazgos: 8 aplicados o cubiertos; descartados el tile sin variante mientras carga y un token nuevo para rojo) y `/ponytail-review` (2, aplicados). **Codex: no verificado (sin cuota).**
+  - **Deploy r40 (6/11, ~06:50 hora Bolivia, solo web, OK anticipado del CTO).** Web `quivo-web-00028-w5l`, imagen `web:r40-20261106` desde `8eb18ec` (#330). El script creó `quivo-api-00058-jlq` con la misma imagen `api:r39-20261106`. `/v1/health/ready` ok. Rollback web: `quivo-web-00027-sjs` (r39).
+    - Verificado en prod (Playwright, Pixel 7): barrido de contraste con 0 textos bajo 4,5:1 en oscuro y claro, overflow 0, sin rótulos de puntos de control, hoja real de 4745HGH con "Vuelta 1". GPS de 4745HGH sin cortes tras el deploy (763 puntos).
+    - **Observado sin resolver:** el chip dijo "2 de 2" con 5360NII en `sin_datos` y una sola píldora en el mapa: cuenta sesiones sin GPS como en servicio.
+    - **Falta confirmar en el celular del CTO:** banda blanca bajo las pestañas.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
