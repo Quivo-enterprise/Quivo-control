@@ -39,9 +39,9 @@ Reporte del CTO (6/11): 3115SRI veía que el trufi de "delante" cambiaba muchas 
 - **Falta:** confirmar con el chofer o con un replay de un día posterior al deploy. Codex: no verificado (sin cuota).
 
 **Pendientes.**
-- App: `estado-vecinos.ts` sigue con 10 min para ocultar datos sin red. Alinear en la próxima OTA.
+- App: `estado-vecinos.ts` ya usa 5 min en `main` (#340, `53e15ed`), pero **no está publicada**: llega con la próxima OTA, que corre el CTO.
 - Candidato sin fase: no aparece hasta su primer punto de control.
-- **CI intermitente por las tardes:** `vecinos-ruta.service.test.ts` falló sin relación con el cambio. `ci` pasó al tercer intento. Hipótesis sin confirmar: `rotaciones.service.test.ts` corre `cerrarSesionesVencidas(new Date())` en paralelo y, desde ~15:00 UTC, la regla B cierra las sesiones de ese test (reloj fijo a las 12:00 UTC). También hubo deadlocks por `crear_particion_gps_points`.
+- **CI intermitente por las tardes: resuelto en #340.** Causa comprobada: `cerrarSesionesVencidas(new Date())` de `rotaciones.service.test.ts` cerraba en paralelo las sesiones del test de vecinos, fijado a las 12:00 UTC. Con base descartable y configuración de CI, a las 17:14 UTC: test viejo 5 de 6 corridas fallidas, nuevo 0 de 6 (57 de 57). La CI de #340 pasó al primer intento a las ~17:25 UTC. Los deadlocks por `crear_particion_gps_points` son otra causa y siguen posibles. `en-vivo.service.test.ts` usa el mismo reloj y no se revisó si choca.
 - Chrome 91 real (emulador, API 31), como delegado en prod: Hoy, En vivo, Salidas, Alertas y Más sin barra blanca, sin overflow (`scrollWidth` = 393), sidebar oculta y tabbar visible, con capturas. El emulador se reinició una vez justo después de abrir En vivo (mapa); causa no investigada. El Xiaomi real sigue sin verificar.
 
 ## 2026-11-06: barra blanca en Chrome 95, sesión del panel estable y rol `delegado`
