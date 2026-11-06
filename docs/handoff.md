@@ -6,6 +6,36 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## 2026-11-06: prueba de vecinos con 2 emuladores contra prod y OTA pendiente
+
+Prueba con el APK 17 en dos emuladores (`quivo_trufi2`, `quivo_trufi3`) contra prod (r43) con trufis de prueba, elegido por el CTO. GPS por `adb emu geo fix` sobre el trazado de `l16-piloto-trazas.json`. Appium no se instaló: no hacía falta para mover el GPS.
+
+**Probado en vivo (capturas de la app):**
+- 1616PIB en la fila: 1616PIC, ya en ruta, muestra "Nadie detrás". 1616PIB ve a 1616PIC delante a 985 m.
+- Al salir 1616PIB de la fila: 1616PIB ve a 1616PIC delante (1.6 km) y 1616PIC ve a 1616PIB detrás (1.9 km).
+- Tras reabrir la app, 1616PIC vuelve a ver a 1616PIB detrás a 4.7 km.
+
+**No probado en vivo: doble vía.** `quivo_trufi3` se cayó dos veces antes de llegar al retorno, así que 1616PIC nunca entró en regreso. La doble vía queda cubierta solo por el test de integración de #338 y por los datos reales de 5360NII. Causa de las caídas: desconocida. El kernel no registra OOM, y el swap llegó a 12.3 de 13.8 GB con dos emuladores de 4 GB. Repetir en una máquina con más RAM o confirmar con un chofer real.
+
+**Indicio, no prueba:** 1616PIB dejó de ver a 1616PIC 6 min después de su último GPS, igual que el límite de 5 min del API. No se aisló la causa.
+
+**Otros hallazgos:**
+- Tras reiniciar el emulador, la app recuperó la sesión con "El GPS se detuvo", y al volver a Comenzar ruta no subió más GPS: 1616PIC tiene su último punto a las 17:52:25Z. El emulador cayó poco después, así que no se sabe si es un fallo de la app. Revisar si un celular real que se reinicia a mitad de ruta sigue subiendo GPS.
+- Un `geo fix 0 0` mandado por error a los dos emuladores no llegó a la base: 0 puntos cerca de 0,0.
+
+**Datos en prod:** sesiones `e6ed651e` (1616PIC, 237 puntos GPS) y `5abf5339` (1616PIB, 244 puntos) cerradas a mano, solo esas dos: ejecución `quivo-migraciones-879jp`, verificada en `quivo-migraciones-x8dw7`. Las dos filas de `fila_salida` quedaron en `salio`. 0 infracciones, 0 sesiones activas al cerrar. Los datos GPS quedan guardados.
+
+**Pendiente:**
+- **OTA con el límite de 5 min en la app:** sin publicar, lo corre el CTO. Bundle verificado sin publicar el 6/11: singletons y `EXPO_PUBLIC_*` correctos, runtime `8bd0b896` igual al del APK 17. En `apps/mobile` lo único nuevo es `estado-vecinos.ts`. Comando:
+  `cd apps/mobile && echo y | ./scripts/publicar-ota.sh "vecinos: limite de 5 min"`
+- Doble vía en vivo y confirmación con chofer real de #338 (replay de un día posterior al deploy).
+- Xiaomi real del delegado: el CTO lo deja para después.
+- Rotaciones desde el 14/11: sin cargar, los choferes no entran después del 13/11.
+- `en-vivo.service.test.ts` puede tener el mismo problema de reloj que #340.
+- Retroceso de 3115SRI a las 15:47Z del 6/11: sin explicar.
+- iOS.
+- Codex: no verificado (sin cuota hasta el 3/12).
+
 ## 2026-11-06: cierre manual de todas las sesiones de choferes (pedido del CTO, ~13:02 hora Bolivia)
 
 El CTO pidió cerrar todas las sesiones activas de los pilotos. No hay endpoint de admin para esto y Cloud SQL solo tiene IP privada, así que se hizo con `gcloud run jobs execute quivo-migraciones --args=...` (override por ejecución, el job no cambia).
