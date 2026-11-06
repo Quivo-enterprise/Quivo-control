@@ -9,6 +9,7 @@ import { useAuth } from '../../../src/lib/auth/auth-context';
 import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
+  useInfraccionesHoy,
   useRutasDeLinea,
   useMolinosResumen,
   INTERVALO_POLL_POSICIONES_MS,
@@ -69,6 +70,8 @@ function EnVivoContenido() {
   // `null`, nunca gobierna qué se pinta en el mapa.
   const posiciones = usePosicionesEnVivo(token);
   const molinos = useMolinosResumen(token);
+  // Misma consulta (y clave) que Hoy y Alertas: no suma un poll y las acciones del panel ya la invalidan.
+  const infraccionesHoy = useInfraccionesHoy(token);
   // El `operador` (control) no tiene dashboard ni atiende infracciones: "Panel" pasa a "Salir" y
   // el panel del vehículo muestra las infracciones en solo lectura. Allowlist: sale de los roles
   // del dashboard (`/`), no de excluir roles a mano. Esos mismos roles son los que pueden leer
@@ -579,6 +582,12 @@ function EnVivoContenido() {
           nivelFiltro={nivelFiltro}
           onNivel={setNivelFiltro}
           alertasPendientes={alertasOrdenadas.length}
+          abiertasHoy={
+            infraccionesHoy.data && !infraccionesHoy.isError
+              ? infraccionesHoy.data.filter((i) => i.estado === 'abierta' && (!lineaFilter || i.lineaId === lineaFilter)).length
+              : null
+          }
+          puedeVerAlertas={user ? isRouteAllowedForRole(NAV_ITEMS, '/alertas', user.rol) : false}
           resumenAlertas={resumenContadores(contarPorNivel(alertasOrdenadas))}
           siguienteAlertaRef={siguienteAlertaRef}
           onSiguienteAlerta={irASiguienteAlerta}

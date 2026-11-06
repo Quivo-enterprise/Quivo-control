@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Select, type SelectOption } from '@quivo/design-system';
 import type { GravedadRegla, Linea } from '@quivo/shared';
 import { ArrowLeft, BellRing, CircleCheck, Clock, History, ListFilter, LogOut, Radio, WifiOff } from 'lucide-react';
-import { ETIQUETA_NIVEL, NIVELES_DESC } from '../../../src/lib/en-vivo/alertas';
+import { ETIQUETA_NIVEL, NIVELES_DESC, resumenAlertasDia } from '../../../src/lib/en-vivo/alertas';
 import { useSaludRefresco, type SaludRefresco } from '../../../src/lib/en-vivo/use-salud-refresco';
 import { IconoNivel } from './panel-vehiculo';
 
@@ -46,6 +46,10 @@ interface BarraMandoProps {
   nivelFiltro: GravedadRegla | null;
   onNivel: (nivel: GravedadRegla | null) => void;
   alertasPendientes: number;
+  /** Alertas abiertas de hoy (`useInfraccionesHoy`); `null` mientras carga o si falló. */
+  abiertasHoy: number | null;
+  /** El `operador` no puede abrir /alertas. */
+  puedeVerAlertas: boolean;
   resumenAlertas: string;
   siguienteAlertaRef: RefObject<HTMLButtonElement>;
   onSiguienteAlerta: () => void;
@@ -57,6 +61,7 @@ interface BarraMandoProps {
 
 export function BarraMando(p: BarraMandoProps) {
   const sinInfracciones = NIVELES_DESC.every((n) => p.conteoNiveles[n] === 0) && !p.nivelFiltro;
+  const dia = resumenAlertasDia(p.abiertasHoy, p.alertasPendientes, p.puedeVerAlertas);
   return (
     <header className="qv-live-barra" aria-label="Barra de mando de En vivo">
       <div className="qv-live-barra__fila">
@@ -128,10 +133,13 @@ export function BarraMando(p: BarraMandoProps) {
         solo: cada nivel lleva su ícono y su texto. */}
         <div className="qv-live-alertas" role="group" aria-label="Alertas por infracción">
           {sinInfracciones ? (
-            <span className="qv-live-alertas__vacio">
-              <CircleCheck size={14} aria-hidden="true" />
-              Sin infracciones abiertas
-            </span>
+            // Sin texto (día cargando o fallido) no se afirma nada: un cero falso es peor que el hueco.
+            dia.texto && (
+              <span className="qv-live-alertas__vacio">
+                {p.abiertasHoy === 0 ? <CircleCheck size={14} aria-hidden="true" /> : <BellRing size={14} aria-hidden="true" />}
+                {dia.texto}
+              </span>
+            )
           ) : (
             NIVELES_DESC.map((nivel) => {
               const n = p.conteoNiveles[nivel];
@@ -158,17 +166,25 @@ export function BarraMando(p: BarraMandoProps) {
           )}
         </div>
 
-        <button
-          ref={p.siguienteAlertaRef}
-          type="button"
-          className="qv-live-btn qv-live-btn--primario"
-          disabled={p.alertasPendientes === 0}
-          onClick={p.onSiguienteAlerta}
-          title={p.alertasPendientes > 0 ? `Ir a la siguiente alerta (${p.resumenAlertas})` : undefined}
-        >
-          <BellRing size={14} aria-hidden="true" />
-          Siguiente alerta
-        </button>
+        {dia.boton === 'enlace' && (
+          <Link className="qv-live-btn qv-live-btn--primario" href="/alertas">
+            <BellRing size={14} aria-hidden="true" />
+            Ver alertas
+          </Link>
+        )}
+        {dia.boton === 'siguiente' && (
+          <button
+            ref={p.siguienteAlertaRef}
+            type="button"
+            className="qv-live-btn qv-live-btn--primario"
+            disabled={p.alertasPendientes === 0}
+            onClick={p.onSiguienteAlerta}
+            title={p.alertasPendientes > 0 ? `Ir a la siguiente alerta (${p.resumenAlertas})` : undefined}
+          >
+            <BellRing size={14} aria-hidden="true" />
+            Siguiente alerta
+          </button>
+        )}
       </div>
     </header>
   );

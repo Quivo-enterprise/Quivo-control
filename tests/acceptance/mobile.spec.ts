@@ -518,6 +518,42 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
+  test('En vivo: el resumen cuenta las alertas abiertas de hoy aunque /posiciones no las traiga', async () => {
+    test.setTimeout(90_000);
+    const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
+    const pos = {
+      id: id(1), deviceId: 'd1', activa: true, vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaId: id(4), lineaNombre: 'Línea 16',
+      rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando',
+      vehiculoId: id(2), infraccionesAbiertas: 0,
+    };
+    // Las 3 alertas son de OTRA sesión del vehículo: la ganadora de /posiciones dice 0.
+    const alerta = (n: number) => ({
+      sindicatoId: id(1), vehiculoId: id(2), conductorId: id(3), lineaId: id(4), rutaId: id(5), reglaId: null, finTs: null,
+      lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
+      id: id(100 + n), sesionId: id(200 + n), tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
+      vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    });
+    let hoy: unknown[] = [alerta(1), alerta(2), alerta(3)];
+    await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: hoy }));
+    try {
+      await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const barra = page.getByLabel('Barra de mando de En vivo');
+      await expect(barra).toContainText('3 alertas abiertas', { timeout: 30_000 });
+      await expect(barra).not.toContainText('Sin infracciones abiertas');
+      await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveAttribute('href', '/alertas');
+      await expect(barra.getByRole('button', { name: 'Siguiente alerta' })).toHaveCount(0);
+
+      hoy = [];
+      await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(barra).toContainText('Sin infracciones abiertas', { timeout: 30_000 });
+      await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveCount(0);
+    } finally {
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+    }
+  });
+
   test('Alertas: "Ver en mapa" abre el vehículo de la sesión en En vivo una sola vez', async () => {
     test.setTimeout(90_000);
     const sesionId = '00000000-0000-4000-8000-0000000000f1';

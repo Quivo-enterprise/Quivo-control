@@ -255,3 +255,20 @@ export const horaBo = (ts: number | Date): string => HORA_BO.format(ts);
 
 /** "1 alerta abierta" / "3 alertas abiertas". */
 export const textoAlertasAbiertas = (n: number): string => `${n} alerta${n === 1 ? '' : 's'} abierta${n === 1 ? '' : 's'}`;
+
+/**
+ * Resumen de la barra de En vivo con las alertas abiertas DEL DÍA (`abiertasHoy`, `null` = cargando o
+ * fallida) y el botón junto a él. /posiciones trae una sola sesión por vehículo: las alertas de otras
+ * sesiones de hoy no se alcanzan en el mapa (`alcanzables`), y ahí "Siguiente alerta" pasa a "Ver alertas".
+ * Sin permiso para /alertas (`operador`) el botón se oculta en vez de quedar deshabilitado junto al número.
+ */
+export function resumenAlertasDia(
+  abiertasHoy: number | null,
+  alcanzables: number,
+  puedeVerAlertas: boolean,
+): { texto: string | null; boton: 'siguiente' | 'enlace' | 'oculto' } {
+  if (alcanzables > 0) return { texto: null, boton: 'siguiente' };
+  if (abiertasHoy === null) return { texto: null, boton: 'siguiente' };
+  if (abiertasHoy === 0) return { texto: 'Sin infracciones abiertas', boton: 'siguiente' };
+  return { texto: textoAlertasAbiertas(abiertasHoy), boton: puedeVerAlertas ? 'enlace' : 'oculto' };
+}
