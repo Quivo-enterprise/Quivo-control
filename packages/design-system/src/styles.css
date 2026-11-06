@@ -271,29 +271,30 @@ body::-webkit-scrollbar {
   background: currentColor;
 }
 
+/* Etiqueta >= 4,5:1 sobre su fondo: tokens de texto de estado, no los colores de relleno. */
 .qv-status-badge--active {
   background: color-mix(in srgb, var(--qv-color-success) 15%, transparent);
-  color: var(--qv-color-success);
+  color: var(--qv-estado-reportando-texto);
 }
 
 .qv-status-badge--inactive {
   background: var(--qv-surface-sunken);
-  color: var(--qv-text-secondary);
+  color: var(--qv-estado-inactivo-texto);
 }
 
 .qv-status-badge--idle {
   background: var(--qv-surface-sunken);
-  color: var(--qv-text-muted);
+  color: var(--qv-estado-inactivo-texto);
 }
 
 .qv-status-badge--warning {
   background: var(--qv-color-warning-soft);
-  color: var(--qv-color-warning);
+  color: var(--qv-estado-en-pausa-texto);
 }
 
 .qv-status-badge--canceled {
   background: color-mix(in srgb, var(--qv-color-danger) 15%, transparent);
-  color: var(--qv-color-danger);
+  color: var(--qv-estado-perdido-texto);
 }
 
 .qv-status-badge--pending {
