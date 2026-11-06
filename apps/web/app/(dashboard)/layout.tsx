@@ -133,7 +133,6 @@ function DashboardShell({ children }: { children: ReactNode }) {
       mobileTabs={mobileTabs}
       // En móvil la home se llama "Hoy" (pestaña y encabezado); en escritorio sigue "Dashboard".
       mobileTitle={pathname === '/' ? 'Hoy' : (activeItem?.label ?? 'Quivo')}
-      routeKey={pathname}
       sidebar={
         <SidebarNav
           brand={<BrandLogo variant="logotipo" height={26} />}

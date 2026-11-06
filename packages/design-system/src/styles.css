@@ -271,34 +271,42 @@ body::-webkit-scrollbar {
   background: currentColor;
 }
 
+/* Etiqueta >= 4,5:1 sobre su propio fondo de insignia, en claro y en oscuro: tokens de texto de estado, no los colores de relleno. */
 .qv-status-badge--active {
   background: color-mix(in srgb, var(--qv-color-success) 15%, transparent);
-  color: var(--qv-color-success);
+  color: var(--qv-estado-reportando-texto);
 }
 
 .qv-status-badge--inactive {
   background: var(--qv-surface-sunken);
-  color: var(--qv-text-secondary);
+  color: var(--qv-estado-inactivo-texto);
 }
 
 .qv-status-badge--idle {
   background: var(--qv-surface-sunken);
-  color: var(--qv-text-muted);
+  color: var(--qv-estado-inactivo-texto);
 }
 
 .qv-status-badge--warning {
   background: var(--qv-color-warning-soft);
-  color: var(--qv-color-warning);
+  color: var(--qv-estado-en-pausa-texto);
 }
 
 .qv-status-badge--canceled {
   background: color-mix(in srgb, var(--qv-color-danger) 15%, transparent);
-  color: var(--qv-color-danger);
+  color: var(--qv-estado-perdido-texto);
 }
 
 .qv-status-badge--pending {
   background: var(--qv-color-primary-subtle);
   color: var(--qv-color-primary);
+}
+
+/* En oscuro el primario (#6672f5) sobre primary-subtle (#191943) da 4,19:1: se usa el texto primario (15,2:1). */
+@media (prefers-color-scheme: dark) {
+  .qv-status-badge--pending {
+    color: var(--qv-text-primary);
+  }
 }
 
 /* =========================================================================
@@ -4997,6 +5005,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-decoration: none;
     white-space: nowrap;
+    touch-action: manipulation;
   }
   .qv-live-panel__m-btn--pri {
     background: var(--qv-color-primary);
@@ -5320,14 +5329,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 
 
 /* =========================================================================
-   Móvil (≤720px) — PR A fundación: drawer, topbar, modal a pantalla completa,
+   Móvil (≤720px) — PR A fundación: topbar, modal a pantalla completa,
    tablas apiladas. Va al final para ganar a las reglas de escritorio sin tocarlas.
    ========================================================================= */
 
 /* Elementos solo-móvil: ocultos en escritorio. */
-.qv-admin-layout__topbar,
-.qv-admin-layout__backdrop,
-.qv-admin-layout__drawer-close {
+.qv-admin-layout__topbar {
   display: none;
 }
 
@@ -5427,42 +5434,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     flex: none;
   }
 
-  .qv-admin-layout__menu-btn,
-  .qv-admin-layout__drawer-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    width: 2.75rem;
-    height: 2.75rem;
-    border: 0;
-    border-radius: var(--qv-radius-lg);
-    background: transparent;
-    color: var(--qv-text-primary);
-    cursor: pointer;
-  }
-
-  .qv-admin-layout__menu-btn,
-  .qv-admin-layout__drawer-close {
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-
-  .qv-admin-layout__menu-btn:hover,
-  .qv-admin-layout__drawer-close:hover {
-    background: color-mix(in srgb, var(--qv-color-primary) 6%, var(--qv-surface-card));
-  }
-
-  .qv-admin-layout__menu-btn:focus-visible,
-  .qv-admin-layout__drawer-close:focus-visible {
-    outline: none;
-    box-shadow: var(--qv-shadow-focus);
-  }
-
-  .qv-admin-layout__sidebar .qv-sidebar__scroll-area {
-    overscroll-behavior: contain;
-  }
-
   .qv-admin-layout__topbar-title {
     min-width: 0;
     overflow: hidden;
@@ -5475,69 +5446,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-primary);
   }
 
-  /* Drawer = la sidebar existente */
+  /* La navegación son las pestañas inferiores: la sidebar solo existe en escritorio. */
   .qv-admin-layout .qv-admin-layout__sidebar,
   .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    top: 0 !important;
-    width: min(20rem, 86vw);
-    height: 100vh !important;
-    height: 100dvh !important;
-    padding: 0 !important;
-    z-index: 960 !important;
-    transform: translateX(-100%);
-    visibility: hidden;
-    transition: transform 0.25s ease, visibility 0s linear 0.25s;
-  }
-
-  .qv-admin-layout--nav-open .qv-admin-layout__sidebar {
-    transform: none;
-    visibility: visible;
-    transition: transform 0.25s ease, visibility 0s;
-  }
-
-  .qv-admin-layout__sidebar .qv-sidebar__capsule {
-    border-radius: 0 var(--qv-radius-xl) var(--qv-radius-xl) 0;
-    padding-top: calc(var(--qv-space-md) + env(safe-area-inset-top));
-    padding-bottom: calc(var(--qv-space-md) + env(safe-area-inset-bottom));
-    padding-left: calc(var(--qv-space-sm) + env(safe-area-inset-left));
-  }
-
-  .qv-admin-layout__drawer-close {
-    position: absolute;
-    top: calc(var(--qv-space-xs) + env(safe-area-inset-top));
-    right: var(--qv-space-xs);
-    z-index: 2;
-  }
-
-  .qv-admin-layout__sidebar .qv-sidebar__link,
-  .qv-admin-layout__sidebar .qv-sidebar__logout {
-    min-height: 2.75rem;
-  }
-
-  .qv-admin-layout__backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 950;
-    background: rgba(10, 8, 28, 0.55);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease;
-  }
-
-  .qv-admin-layout--nav-open .qv-admin-layout__backdrop {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .qv-admin-layout .qv-admin-layout__sidebar,
-    .qv-admin-layout--nav-open .qv-admin-layout__sidebar,
-    .qv-admin-layout__backdrop {
-      transition: none;
-    }
+    display: none;
   }
 
   /* Modal a pantalla completa: header arriba, footer abajo, el cuerpo scrollea */
@@ -5894,6 +5806,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-align: left;
     cursor: pointer;
+    touch-action: manipulation;
   }
   .qv-menu-ac__item:hover,
   .qv-menu-ac__item:focus-visible {
@@ -6003,7 +5916,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     display: flex;
     position: fixed;
     inset: auto 0 0 0;
-    z-index: 900; /* bajo el drawer (950/960) y los modales (1000) */
+    z-index: 900; /* bajo los modales (1000) */
     box-sizing: border-box;
     height: var(--qv-tabbar-h);
     padding: 6px calc(4px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
@@ -6479,6 +6392,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-align: left;
     cursor: pointer;
+    touch-action: manipulation;
   }
 
   .qv-fila-m__menu-item:hover,
@@ -7417,6 +7331,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-weight: 700;
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .qv-mas-list__link:active {
@@ -7473,6 +7388,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .qv-mas-logout:focus-visible {

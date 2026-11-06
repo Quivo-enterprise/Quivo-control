@@ -17,14 +17,14 @@ const fuente = OXANIUM && existsSync(OXANIUM)
 
 type Caso = { placa?: string; estado: EstadoGlifo; sel?: boolean; alerta?: 'leve' | 'grave' | 'gravisima'; n?: number; molinos?: string; linea?: string };
 const CASOS: Caso[] = [
-  { placa: '4701EHA', estado: 'reportando' },
-  { placa: '2230KLM', estado: 'detenido' },
-  { placa: '5163NCF', estado: 'en_pausa' },
-  { placa: '4120MZX', estado: 'perdido' },
-  { placa: '3318TRB', estado: 'finalizado' },
+  { placa: '9001TST', estado: 'reportando' },
+  { placa: '9004TST', estado: 'detenido' },
+  { placa: '9003TST', estado: 'en_pausa' },
+  { placa: '9005TST', estado: 'perdido' },
+  { placa: '9006TST', estado: 'finalizado' },
   { placa: '7712ABC', estado: 'inactivo' },
   { placa: '1010XYZ', estado: 'sin_datos' },
-  { placa: '1616PIL', estado: 'reportando', sel: true },
+  { placa: '9002TST', estado: 'reportando', sel: true },
   { placa: '9001ALR', estado: 'reportando', alerta: 'grave', n: 3, linea: '#e11d48' },
   { placa: '9002MOL', estado: 'en_pausa', molinos: 'M2' },
   { placa: '9003ALM', estado: 'perdido', alerta: 'gravisima', n: 12, molinos: 'M', linea: '#ffffff' },

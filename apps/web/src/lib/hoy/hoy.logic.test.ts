@@ -7,37 +7,37 @@ const cond = (id: string, nombre: string, telefono: string | null) => ({ id, nom
 const jor = (vehiculoId: string, conductorId: string | null, conductorNombre: string | null) =>
   ({ vehiculoId, conductorId, conductorNombre, lineaNombre: 'Línea 16' }) as JornadaVehiculo;
 
-const V = [veh('v1', '4701-EHA'), veh('v2', '1616PIL')];
-const C = [cond('c1', 'José Bravo', '71234567'), cond('c2', 'Ana Quispe', null), cond('c3', 'Ana Quispe', '72222222')];
+const V = [veh('v1', '9001-TST'), veh('v2', '9002TST')];
+const C = [cond('c1', 'Ana Pérez', '71234567'), cond('c2', 'Ana Quispe', null), cond('c3', 'Ana Quispe', '72222222')];
 
 describe('buscarHoy', () => {
   it('normaliza tildes, espacios y guiones', () => {
-    expect(normalizarBusqueda('4701-EHA ')).toBe('4701eha');
-    expect(normalizarBusqueda('José')).toBe('jose');
+    expect(normalizarBusqueda('9001-TST ')).toBe('9001tst');
+    expect(normalizarBusqueda('Pérez')).toBe('perez');
   });
   it('exige al menos 2 caracteres', () => {
     expect(buscarHoy('4', V, C, []).resultados).toEqual([]);
   });
   it('encuentra placa con otro formato y trae el teléfono del conductor de hoy por id', () => {
-    const { resultados } = buscarHoy('4701 eh', V, C, [jor('v1', 'c1', 'Jose Bravo')]);
+    const { resultados } = buscarHoy('9001 ts', V, C, [jor('v1', 'c1', 'Ana Prueba')]);
     expect(resultados).toHaveLength(1);
-    expect(resultados[0]).toMatchObject({ tipo: 'vehiculo', titulo: '4701-EHA', telefono: '71234567', detalle: 'Línea 16 · Jose Bravo' });
+    expect(resultados[0]).toMatchObject({ tipo: 'vehiculo', titulo: '9001-TST', telefono: '71234567', detalle: 'Línea 16 · Ana Prueba' });
   });
-  it('placa con punto: "4701.eha" encuentra "4701-EHA"', () => {
-    expect(buscarHoy('4701.eha', V, C, []).resultados.map((r) => r.id)).toEqual(['v1']);
+  it('placa con punto: "9001.tst" encuentra "9001-TST"', () => {
+    expect(buscarHoy('9001.tst', V, C, []).resultados.map((r) => r.id)).toEqual(['v1']);
   });
   it('homónimos: el teléfono sale del conductorId, no del nombre', () => {
-    expect(buscarHoy('4701', V, C, [jor('v1', 'c3', 'Ana Quispe')]).resultados[0]?.telefono).toBe('72222222');
-    expect(buscarHoy('4701', V, C, [jor('v1', 'c2', 'Ana Quispe')]).resultados[0]?.telefono).toBeNull();
+    expect(buscarHoy('9001', V, C, [jor('v1', 'c3', 'Ana Quispe')]).resultados[0]?.telefono).toBe('72222222');
+    expect(buscarHoy('9001', V, C, [jor('v1', 'c2', 'Ana Quispe')]).resultados[0]?.telefono).toBeNull();
   });
   it('sin turno, sin conductor o conductor fuera de la lista: sin teléfono', () => {
-    expect(buscarHoy('1616', V, C, []).resultados[0]).toMatchObject({ telefono: null, detalle: 'Sin turno hoy' });
-    expect(buscarHoy('4701', V, C, [jor('v1', null, null)]).resultados[0]?.telefono).toBeNull();
-    expect(buscarHoy('4701', V, C, [jor('v1', 'c9', 'Otro')]).resultados[0]?.telefono).toBeNull();
+    expect(buscarHoy('9002', V, C, []).resultados[0]).toMatchObject({ telefono: null, detalle: 'Sin turno hoy' });
+    expect(buscarHoy('9001', V, C, [jor('v1', null, null)]).resultados[0]?.telefono).toBeNull();
+    expect(buscarHoy('9001', V, C, [jor('v1', 'c9', 'Otro')]).resultados[0]?.telefono).toBeNull();
   });
   it('encuentra conductor por nombre sin tildes', () => {
-    expect(buscarHoy('jose', V, C, []).resultados).toEqual([
-      { tipo: 'conductor', id: 'c1', titulo: 'José Bravo', detalle: 'Conductor', telefono: '71234567' },
+    expect(buscarHoy('perez', V, C, []).resultados).toEqual([
+      { tipo: 'conductor', id: 'c1', titulo: 'Ana Pérez', detalle: 'Conductor', telefono: '71234567' },
     ]);
   });
   it('al truncar devuelve el total, 10 de cada tipo y el otro tipo llena lo que sobra', () => {
