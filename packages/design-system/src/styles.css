@@ -6121,3 +6121,150 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     min-height: 2.75rem;
   }
 }
+
+/* Diseño B — placa y primitivas. Solo <= 720 px, escritorio no cambia. */
+@media (max-width: 720px) {
+  /* Placa de la señalética: fuente display (Oxanium en apps/web), borde tinta, sin banda "BOL" ni azul (comp .plate). */
+  .qv-plate {
+    display: inline-block;
+    height: auto;
+    overflow: visible;
+    padding: 1px 9px;
+    border: 2px solid #0f172a;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .qv-plate__country {
+    display: none;
+  }
+
+  .qv-plate__value {
+    display: inline;
+    padding: 0;
+    font-family: var(--qv-font-display);
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.07em;
+    color: #0f172a;
+  }
+
+  .qv-plate--lg {
+    padding: 2px 12px;
+    border-width: 2.5px;
+    border-radius: 10px;
+  }
+
+  .qv-plate--lg .qv-plate__value {
+    font-size: 1.875rem;
+  }
+
+  /* Tarjeta plana: borde 1.5 px, sin sombra, relleno 14 px (comp .card). */
+  .qv-card,
+  .qv-kpi-card {
+    border-width: 1.5px;
+    box-shadow: none;
+  }
+
+  .qv-card__body {
+    padding: 14px;
+  }
+
+  .qv-card__header,
+  .qv-card__footer {
+    padding: 10px 14px;
+  }
+
+  .qv-kpi-card {
+    padding: 14px;
+  }
+
+  .qv-kpi-card__value {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Botón de 52 px con borde grueso (comp .btn). `sm`, las acciones de fila y los botones de icono de la tabla apilada no son `md` y no cambian; el −/+ y Guardar de base rápida sí (52×48, sin desborde a 360 px). */
+  .qv-button--md {
+    min-height: 3.25rem;
+    padding-inline: 14px;
+    border: 2px solid var(--qv-border-strong);
+    border-radius: var(--qv-radius-md);
+    font-size: 1rem;
+    font-weight: 700;
+    gap: 8px;
+  }
+
+  .qv-button--md.qv-button--primary {
+    border-color: var(--qv-color-primary);
+  }
+
+  .qv-button--md.qv-button--secondary {
+    background: var(--qv-surface-card);
+    color: var(--qv-text-primary);
+  }
+
+  /* Gana al hover base (azul) que en táctil queda pegado tras el toque. */
+  .qv-button--md.qv-button--secondary:not(:disabled):hover {
+    background: var(--qv-surface-soft);
+  }
+
+  .qv-button--md.qv-button--ghost {
+    background: var(--qv-surface-soft);
+    color: var(--qv-text-primary);
+    border-color: var(--qv-border-subtle);
+  }
+
+  .qv-button--md.qv-button--danger {
+    border-color: var(--qv-color-danger);
+  }
+
+  .qv-button--md.qv-button--accent {
+    border-color: var(--qv-color-accent);
+  }
+
+  /* Estado = punto + texto, sin píldora; la forma repite el estado: círculo ok, rombo aviso, cuadrado error (comp .st). */
+  .qv-status-badge {
+    padding: 0;
+    gap: 8px;
+    background: transparent;
+    font-size: 1rem;
+    text-transform: none;
+  }
+
+  .qv-status-badge__dot {
+    width: 11px;
+    height: 11px;
+  }
+
+  .qv-status-badge--active {
+    color: var(--qv-estado-reportando-texto);
+  }
+
+  .qv-status-badge--warning {
+    color: var(--qv-estado-en-pausa-texto);
+  }
+
+  .qv-status-badge--warning .qv-status-badge__dot {
+    border-radius: 3px;
+    transform: rotate(45deg);
+  }
+
+  .qv-status-badge--canceled {
+    color: var(--qv-estado-perdido-texto);
+  }
+
+  .qv-status-badge--canceled .qv-status-badge__dot {
+    border-radius: 2px;
+  }
+
+  /* Estados neutros: círculo hueco, distinto del punto relleno de "activo". */
+  .qv-status-badge--inactive .qv-status-badge__dot,
+  .qv-status-badge--idle .qv-status-badge__dot,
+  .qv-status-badge--pending .qv-status-badge__dot {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px currentColor;
+  }
+}

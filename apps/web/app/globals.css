@@ -3069,6 +3069,15 @@ body {
   letter-spacing: 0.08em;
 }
 
+/* Celular: la placa de señalética (.qv-plate) se ajusta a su contenido, sin caja alta ni sombra. */
+@media (max-width: 720px) {
+  .vehicle-form-live-plate.qv-plate {
+    height: auto;
+    min-width: 0;
+    box-shadow: none;
+  }
+}
+
 .vehicle-plate-validation {
   align-items: center;
   border-radius: var(--qv-radius-sm);
