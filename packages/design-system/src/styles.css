@@ -2921,8 +2921,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     gap: 0.3em;
     min-width: 76px;
     height: 100%;
-    padding: 0 9px;
+    /* Barra izquierda con el color de la línea (como en escritorio); el padding la compensa para que el texto siga centrado. */
+    padding: 0 9px 0 6.5px;
     border: 2.5px solid #fff;
+    border-left: 5px solid var(--qv-gmap-veh-linea, #fff);
     border-radius: 999px;
     box-shadow: 0 1px 4px rgb(15 23 42 / 0.5);
     background: var(--qv-gmap-pill);
@@ -2934,21 +2936,28 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--seleccionado > .qv-gmap-veh__placa {
     min-width: 104px;
+    padding-left: 7px;
     border-width: 4px;
+    border-left-width: 6px;
     font-size: 17px;
+    z-index: 1;
   }
-  /* Prefijo de forma (el texto alternativo vacío evita repetir el estado: ya está en el aria-label). */
+  /* Prefijo de forma (la placa es aria-hidden: el estado va en el aria-label del marcador). `sin_datos` también cubre un estado desconocido. */
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-detenido > .qv-gmap-veh__placa::before {
-    content: '■' / '';
+    content: '■';
   }
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-en_pausa > .qv-gmap-veh__placa::before {
-    content: '–' / '';
+    content: '–';
   }
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-perdido > .qv-gmap-veh__placa::before {
-    content: '!' / '';
+    content: '!';
   }
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-finalizado > .qv-gmap-veh__placa::before {
-    content: '✓' / '';
+    content: '✓';
+  }
+  .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-inactivo > .qv-gmap-veh__placa::before,
+  .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--est-sin_datos > .qv-gmap-veh__placa::before {
+    content: '○';
   }
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--seleccionado::before {
     inset: auto;
@@ -2961,13 +2970,19 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     background: color-mix(in srgb, var(--qv-gmap-pill-sel) 22%, transparent);
     box-shadow: none;
   }
-  .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap-veh--seleccionado > .qv-gmap-veh__placa {
-    z-index: 1;
-  }
-  /* Zona táctil >= 44 px de alto sin agrandar la píldora (la insignia de severidad sobresale a la derecha). */
+  /* Zona táctil >= 44 px de alto sin agrandar la píldora; con insignias se extiende para cubrirlas
+     enteras (alerta 20 px sobre la píldora, Molinos 18 px bajo ella; ellas llevan pointer-events: none). */
   .qv-gmap-veh:has(> .qv-gmap-veh__placa).qv-gmap--clickable::after {
     inset: calc((var(--qv-gmap-pill-h) - 44px) / 2) -6px;
     border-radius: 22px;
+  }
+  .qv-gmap-veh:has(> .qv-gmap-veh__placa):has(> .qv-gmap-veh__alerta).qv-gmap--clickable::after {
+    top: -19px;
+    border-radius: 4px;
+  }
+  .qv-gmap-veh:has(> .qv-gmap-veh__placa):has(> .qv-gmap-veh__molinos).qv-gmap--clickable::after {
+    bottom: -17px;
+    border-radius: 4px;
   }
   /* Adjuntos fuera del texto de la placa: la alerta sobre el extremo derecho y Molinos bajo el izquierdo,
      solapando como mucho 3 px del borde de la píldora (la caja del texto empieza a >= 3,5 px). */
