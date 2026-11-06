@@ -1326,6 +1326,10 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(hoja.getByRole('link', { name: 'WhatsApp' })).toBeHidden();
       await expect(hoja.getByRole('link', { name: 'Llamar' })).toBeVisible();
       const altoPlegada = (await hoja.boundingBox())!.height;
+      // Plegada a cualquier alto (aquí 915): sin tarjetas ni designación, y la hoja no tapa ni la mitad del mapa.
+      await expect(hoja.locator('.qv-live-panel__m-stat').first()).toBeHidden();
+      await expect(hoja.getByRole('radiogroup')).toBeHidden();
+      expect(altoPlegada).toBeLessThan(page.viewportSize()!.height * 0.45);
       console.log(`hoja: plegada ${altoPlegada}px, expandida ${altoExpandida}px`);
       const tabbar = (await page.getByRole('navigation', { name: 'Pestañas', exact: true }).boundingBox())!;
       const cajaHoja = (await hoja.boundingBox())!;
@@ -1518,7 +1522,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
       for (const idc of controla) await expect(page.locator(`[id="${idc}"]`)).toHaveCount(1);
       if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja_expandida.png` });
       await ctrl.click();
-      await expect(hoja.getByRole('heading', { name: 'Designación' })).toBeVisible();
+      // Plegada a cualquier alto (también 915): sin tarjetas ni designación.
+      await expect(hoja.getByRole('heading', { name: 'Designación' })).toBeHidden();
       if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja.png` });
 
       // 360x640: plegada ≤ 45% del alto, mapa ≥ 50%; expandida muestra Designación; segmentos sin cortar palabras.
