@@ -5407,17 +5407,43 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
-/* PR D — escala móvil (<= 720 px): base 18 px (todo es rem) e inputs >= 16 px (iOS hace zoom por debajo). */
+/* PR D — escala móvil (<= 720 px): inputs >= 16 px (iOS hace zoom por debajo). */
 @media (max-width: 720px) {
-  html {
-    font-size: 112.5%;
-  }
-
   .qv-input__control,
   .qv-select-trigger,
   .qv-textarea,
   .qv-live-inf__input {
     font-size: max(16px, var(--qv-text-sm));
+  }
+}
+
+/* Diseño B (señalética de garita) — tokens móviles. Base 16 px (sin escala de raíz); solo <= 720 px, escritorio no cambia. */
+@media (max-width: 720px) {
+  :root {
+    /* rem para respetar el tamaño de fuente del navegador del usuario. */
+    --qv-text-xs: 0.84375rem;
+
+    /* Texto secundario más oscuro (comp --mute) para leer al sol. */
+    --qv-text-secondary: #475569;
+
+    /* Borde grueso de la señalética (comp --line2). */
+    --qv-border-strong: #94a3b8;
+
+    /* Escala de radios del comp: chip/botón 14, tarjeta 18, control chico 10. */
+    --qv-radius-sm: 10px;
+    --qv-radius-md: 14px;
+    --qv-radius-lg: 18px;
+  }
+
+  body {
+    line-height: 1.45;
+  }
+}
+
+@media (max-width: 720px) and (prefers-color-scheme: dark) {
+  :root {
+    --qv-text-secondary: #a5b2c6;
+    --qv-border-strong: #64748b;
   }
 }
 
@@ -5570,7 +5596,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     justify-content: stretch;
   }
 
-  .qv-fila-acciones .qv-button {
+  /* `.qv-table--stack td[data-label] button` (min-height 2.75rem) ganaba la cascada y la regla de 3rem nunca aplicó; con raíz de 18 px 2.75rem eran 49.5 px y pasaba el check de 48 px. */
+  .qv-fila-tabla .qv-fila-acciones .qv-button {
     width: 100%;
     min-height: 3rem;
     justify-content: center;
