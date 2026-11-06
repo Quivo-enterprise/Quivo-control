@@ -14,6 +14,7 @@ import {
   puedeDescartar,
   puedeSancionar,
   reglasSancionables,
+  resumenAlertasDia,
   resumenContadores,
   siguienteAlertaId,
   telefonoParaWhatsapp,
@@ -267,5 +268,31 @@ describe('aplicarResueltas', () => {
     const r = new Map([['a', { desde: 'abierta' as const, a: 'atendida' as const }]]);
     expect(aplicarResueltas(lista, r).map((i) => i.estado)).toEqual(['atendida', 'abierta']);
     expect(aplicarResueltas([{ id: 'a', estado: 'descartada' as const }], r)[0]!.estado).toBe('descartada');
+  });
+});
+
+describe('resumenAlertasDia', () => {
+  it('con vehículos alcanzables en el mapa conserva "Siguiente alerta"', () => {
+    expect(resumenAlertasDia(3, 2, true)).toEqual({ texto: null, boton: 'siguiente' });
+  });
+  it('alertas del día sin vehículo alcanzable: cuenta y enlace a /alertas', () => {
+    expect(resumenAlertasDia(3, 0, true)).toEqual({ texto: '3 alertas abiertas', boton: 'enlace' });
+    expect(resumenAlertasDia(1, 0, true).texto).toBe('1 alerta abierta');
+  });
+  it('el operador (sin /alertas) no recibe enlace ni botón muerto', () => {
+    expect(resumenAlertasDia(3, 0, false)).toEqual({ texto: '3 alertas abiertas', boton: 'oculto' });
+  });
+  it('cero alertas hoy: "Sin infracciones abiertas"', () => {
+    expect(resumenAlertasDia(0, 0, true).texto).toBe('Sin infracciones abiertas');
+  });
+  it('día cargando: nunca afirma un cero', () => {
+    expect(resumenAlertasDia('cargando', 0, true)).toEqual({ texto: null, boton: 'siguiente' });
+  });
+  it('día fallido sin datos: lo dice en vez de dejar el hueco', () => {
+    expect(resumenAlertasDia('error', 0, true)).toEqual({ texto: 'Alertas del día sin cargar', boton: 'siguiente' });
+  });
+  it('un filtro de vista no cambia lo alcanzable: con alcanzables > 0 sigue "Siguiente alerta"', () => {
+    expect(resumenAlertasDia(3, 2, false)).toEqual({ texto: null, boton: 'siguiente' });
+    expect(resumenAlertasDia('error', 2, true)).toEqual({ texto: null, boton: 'siguiente' });
   });
 });

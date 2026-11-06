@@ -3974,6 +3974,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-live-alertas__vacio svg {
   color: var(--qv-color-success);
 }
+.qv-live-alertas__vacio--hay svg {
+  color: var(--qv-alerta-grave);
+}
 .qv-live-nivel {
   --qv-nivel: var(--qv-alerta-leve);
   display: inline-flex;
@@ -5337,7 +5340,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-live-segmento__op {
     flex: none;
   }
-  .qv-live-barra a.qv-live-btn {
+  .qv-live-barra a.qv-live-btn:not(.qv-live-btn--primario) {
     order: 4;
   }
   .qv-live-btn.qv-live-barra__flota {

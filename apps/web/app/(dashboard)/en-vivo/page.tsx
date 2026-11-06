@@ -9,6 +9,7 @@ import { useAuth } from '../../../src/lib/auth/auth-context';
 import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
+  useInfraccionesHoy,
   useRutasDeLinea,
   useMolinosResumen,
   INTERVALO_POLL_POSICIONES_MS,
@@ -69,6 +70,8 @@ function EnVivoContenido() {
   // `null`, nunca gobierna qué se pinta en el mapa.
   const posiciones = usePosicionesEnVivo(token);
   const molinos = useMolinosResumen(token);
+  // Misma clave que Hoy y Alertas (las acciones del panel ya la invalidan); En vivo suma su propio poll de 30 s.
+  const infraccionesHoy = useInfraccionesHoy(token, 30_000);
   // El `operador` (control) no tiene dashboard ni atiende infracciones: "Panel" pasa a "Salir" y
   // el panel del vehículo muestra las infracciones en solo lectura. Allowlist: sale de los roles
   // del dashboard (`/`), no de excluir roles a mano. Esos mismos roles son los que pueden leer
@@ -119,6 +122,16 @@ function EnVivoContenido() {
   // visibles todos los niveles). El filtro por nivel conserva siempre el vehículo con el panel
   // abierto: atenderle la última alerta no debe cerrarle el panel de golpe.
   const conteoNiveles = useMemo(() => contarPorNivel(posicionesDeLinea), [posicionesDeLinea]);
+  // Alertas alcanzables en el mapa: antes del filtro de nivel/estado, para que ese filtro no cambie el botón.
+  const alertasEnMapa = useMemo(
+    () => posicionesDeLinea.filter((p) => nivelDeAlerta(p) !== null && p.lat !== null && p.lng !== null).length,
+    [posicionesDeLinea],
+  );
+  // Alertas abiertas del día (todas las sesiones) de la línea; con datos viejos se sigue mostrando.
+  const abiertasHoy = useMemo<number | 'cargando' | 'error'>(() => {
+    if (infraccionesHoy.data === undefined) return infraccionesHoy.isError || infraccionesHoy.errorUpdateCount > 0 ? 'error' : 'cargando';
+    return infraccionesHoy.data.filter((i) => i.estado === 'abierta' && (!lineaFilter || i.lineaId === lineaFilter)).length;
+  }, [infraccionesHoy.data, infraccionesHoy.isError, infraccionesHoy.errorUpdateCount, lineaFilter]);
   const posicionesFiltradas = useMemo(
     () =>
       filtrarPorEstado(
@@ -165,7 +178,7 @@ function EnVivoContenido() {
   // vigente de esa sesión; si no, a "Siguiente alerta" o al contenedor del mapa; nunca a <body>).
   const tituloPanelRef = useRef<HTMLHeadingElement>(null);
   const mapaRef = useRef<HTMLDivElement>(null);
-  const siguienteAlertaRef = useRef<HTMLButtonElement>(null);
+  const siguienteAlertaRef = useRef<HTMLButtonElement & HTMLAnchorElement>(null);
   // `puntoId`: si el foco venía de un marcador, id del marcador de la sesión VIGENTE (cambia al
   // cambiar de vehículo con el panel abierto); `siguiente`: venía de "Siguiente alerta".
   const focoPrevioRef = useRef<{ el: HTMLElement | null; puntoId: string | null; siguiente: boolean } | null>(null);
@@ -579,6 +592,9 @@ function EnVivoContenido() {
           nivelFiltro={nivelFiltro}
           onNivel={setNivelFiltro}
           alertasPendientes={alertasOrdenadas.length}
+          alertasEnMapa={alertasEnMapa}
+          abiertasHoy={abiertasHoy}
+          puedeVerAlertas={user ? isRouteAllowedForRole(NAV_ITEMS, '/alertas', user.rol) : false}
           resumenAlertas={resumenContadores(contarPorNivel(alertasOrdenadas))}
           siguienteAlertaRef={siguienteAlertaRef}
           onSiguienteAlerta={irASiguienteAlerta}
