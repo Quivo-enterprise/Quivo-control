@@ -1493,11 +1493,11 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.unroute(urlInfSesion);
       await page.route(urlInfSesion, (r) => r.fulfill({ json: [alerta] }));
 
-      // 412x915: el título es la placa pelada, "Hoy" lleva la variante y la plegada conserva el diseño B.
+      // 412x915: el título es la placa pelada, la tarjeta de vuelta muestra solo "Vuelta N" y la plegada conserva el diseño B.
       hoja = await abrir(412, 915);
       await expect(hoja.getByRole('heading', { name: '9001TST', exact: true, level: 2 })).toHaveCount(1);
-      await expect(hoja.locator('.qv-live-panel__m-stat').nth(0)).toContainText('Vuelta 2 · Vía Molinos Norte');
-      // Con la variante larga ninguna tarjeta se sale de la hoja (la de alertas no se recorta).
+      await expect(hoja.locator('.qv-live-panel__m-stat').nth(0)).toContainText('Vuelta 2');
+      // Ninguna tarjeta se sale de la hoja (la de alertas no se recorta).
       const hojaCaja = (await hoja.boundingBox())!;
       for (const t of await hoja.locator('.qv-live-panel__m-stat').all()) {
         const c = (await t.boundingBox())!;

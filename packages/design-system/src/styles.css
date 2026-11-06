@@ -2512,7 +2512,7 @@ body::-webkit-scrollbar {
 
 /* En el teléfono el mapa va limpio: los puntos de control (ida y vuelta en el mismo sitio) no llevan rótulo. */
 @media (max-width: 720px) {
-  [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada) .qv-gmap-label--marker {
+  [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada):not(.qv-gmap-pt--etiqueta-siempre) .qv-gmap-label--marker {
     display: none;
   }
 }
