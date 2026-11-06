@@ -5377,11 +5377,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     gap: 0;
   }
 
-  /* Aparte: un :has() sin soporte (Chrome < 105) anularía toda la lista. */
-  .qv-admin-layout:has(.qv-route-builder-wrapper) {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 0;
-    gap: 0;
+  /* En @supports: el minificador funde reglas contiguas idénticas en una lista, y un :has() desconocido (Chrome < 105) anula la lista entera. */
+  @supports selector(:has(a)) {
+    .qv-admin-layout:has(.qv-route-builder-wrapper) {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 0;
+      gap: 0;
+    }
   }
 
   .qv-admin-layout__main {
@@ -5472,12 +5474,8 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-primary);
   }
 
-  /* La navegación son las pestañas inferiores: la sidebar solo existe en escritorio. */
+  /* La navegación son las pestañas inferiores: la sidebar solo existe en escritorio. Sin variante :has(): el minificador la fundiría en esta lista y Chrome < 105 la anularía. */
   .qv-admin-layout .qv-admin-layout__sidebar {
-    display: none;
-  }
-
-  .qv-admin-layout:has(.qv-route-builder-wrapper) .qv-admin-layout__sidebar {
     display: none;
   }
 
