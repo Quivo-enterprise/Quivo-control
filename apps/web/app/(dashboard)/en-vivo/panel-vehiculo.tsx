@@ -129,8 +129,9 @@ interface PanelVehiculoProps {
   posicionesRecibidoEn: number;
   /** El `operador` (control) ve las infracciones pero no atiende, descarta ni sanciona. */
   soloLectura: boolean;
-  /** `false` para el `delegado`: sin enlaces a recorridos ni a conductores (rutas que no son suyas). */
-  enlacesAdmin: boolean;
+  /** Enlaces solo a rutas que el rol puede abrir. */
+  puedeVerDias: boolean;
+  puedeVerConductores: boolean;
 }
 
 /** Desplazamiento vertical (px) del arrastre a partir del cual la hoja cambia de altura. */
@@ -157,7 +158,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     trazaRecibidoEn,
     posicionesRecibidoEn,
     soloLectura,
-    enlacesAdmin,
+    puedeVerDias,
+    puedeVerConductores,
   } = props;
   const queryClient = useQueryClient();
   const esMovil = useEsMovil();
@@ -486,7 +488,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
                 Llamar
               </a>
             )}
-            {enlacesAdmin && (
+            {puedeVerDias && (
               <Link className="qv-live-panel__m-btn" href={`/reportes/recorridos/${sesionId}`}>
                 <Route size={22} aria-hidden="true" />
                 Ver recorrido
@@ -549,7 +551,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
           <Navigation size={14} aria-hidden="true" />
           Seguir
         </button>
-        {!esMovil && enlacesAdmin && (
+        {!esMovil && puedeVerDias && (
           <Link className="qv-live-btn" href={`/reportes/recorridos/${sesionId}`}>
             <Route size={14} aria-hidden="true" />
             Ver recorrido
@@ -580,7 +582,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         </span>
       ) : (
         <span className="qv-live-panel__sin-tel">
-          Sin teléfono{enlacesAdmin && <> · <Link href="/conductores">Agregar</Link></>}
+          Sin teléfono{puedeVerConductores && <> · <Link href="/conductores">Agregar</Link></>}
         </span>
       )}
 

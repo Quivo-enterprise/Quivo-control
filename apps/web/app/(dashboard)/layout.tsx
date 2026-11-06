@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   AdminLayout,
   MOBILE_QUERY,
+  ROLE_LABEL,
   SegmentedControl,
   SidebarNav,
   type MobileTab,
@@ -15,7 +16,7 @@ import { BrandLogo } from '../../src/components/brand-logo';
 import { RequireAuth } from '../../src/components/require-auth';
 import { getNavIcon } from '../../src/lib/nav-icons';
 import { useAuth } from '../../src/lib/auth/auth-context';
-import { esDelegado, filterNavItemsByRole, groupNavItemsBySection, isNavActive, isRouteAllowedForRole, masActivo, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
+import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, isRouteAllowedForRole, masActivo, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
 import { textoAlertasAbiertas } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy } from '../../src/lib/en-vivo/use-en-vivo';
 import { useEsMovil } from '../../src/lib/use-es-movil';
@@ -192,7 +193,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {user?.rol === 'admin_quivo' ? 'Admin Central' : esDelegado(user?.rol) ? 'Delegado' : 'Admin Sindicato'}
+                    {ROLE_LABEL[user?.rol ?? ''] ?? user?.rol}
                   </span>
                 </div>
               </div>

@@ -128,6 +128,8 @@ describe('Rol delegado: permitido solo en lo que usan sus cuatro pantallas', () 
     ['SalidasPanelController', SalidasPanelController, 'moverAlFinal'],
     ['SalidasPanelController', SalidasPanelController, 'retirar'],
     ['SalidasPanelController', SalidasPanelController, 'fijarBase'],
+    ['SalidasPanelController', SalidasPanelController, 'crearRegla'],
+    ['SalidasPanelController', SalidasPanelController, 'anularRegla'],
   ])('%s.%s: lo deja pasar', (_n, controller, metodo) => {
     expect(permitido(controller, metodo)).toBe(true);
   });

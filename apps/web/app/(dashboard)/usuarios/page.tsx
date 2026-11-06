@@ -11,6 +11,7 @@ import {
   Loader,
   MetricCard,
   PageHeader,
+  ROLE_LABEL,
   Select,
   Tooltip,
 } from '@quivo/design-system';
@@ -471,13 +472,7 @@ export default function UsuariosPage() {
                               border: '1px solid var(--qv-border-glass)',
                             }}
                           >
-                            {u.rol === 'admin_quivo'
-                              ? 'Admin QUIVO'
-                              : u.rol === 'admin_sindicato'
-                                ? 'Admin Sindicato'
-                                : u.rol === 'delegado'
-                                  ? 'Delegado'
-                                  : 'Conductor'}
+                            {ROLE_LABEL[u.rol] ?? u.rol}
                           </span>
                         </td>
                         <td data-label="Ámbito">

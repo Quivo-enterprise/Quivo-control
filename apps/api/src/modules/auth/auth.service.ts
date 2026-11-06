@@ -317,9 +317,6 @@ export class AuthService {
         if (!sindicato) {
           throw new NotFoundException('Sindicato no encontrado');
         }
-        if (await tx.user.findUnique({ where: { email: emailNormalizado } })) {
-          throw new ConflictException('Ya existe un usuario con ese email');
-        }
         const usuario = (await tx.user.create({
           data: { id, name, email: emailNormalizado, rol, sindicatoId },
           select: { id: true, name: true, email: true, rol: true, sindicatoId: true },

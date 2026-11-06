@@ -6,7 +6,7 @@ import { Alert, Button, ConfirmDialog, Loader, MOBILE_QUERY, RouteMap, type MapP
 import { AlertTriangle, CheckCircle2, Clock, Maximize2, Navigation, Radio, RefreshCw } from 'lucide-react';
 import { etiquetaTipoInfraccion, type EstadoFrescura, type GravedadRegla, type Infraccion } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
-import { esDelegado, isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import {
   useContextoEnVivo,
   useInfraccionesHoy,
@@ -83,7 +83,7 @@ function EnVivoContenido() {
   const [confirmandoSalida, setConfirmandoSalida] = useState(false);
   const puedeVerDias = user ? isRouteAllowedForRole(NAV_ITEMS, '/reportes/recorridos', user.rol) : false;
   const soloLectura = !puedeActuarEnInfracciones(user?.rol);
-  const enlacesAdmin = !esDelegado(user?.rol);
+  const puedeVerConductores = user ? isRouteAllowedForRole(NAV_ITEMS, '/conductores', user.rol) : false;
   const { options: lineaOptions, lineas } = useLineaOptions();
   const [lineaFilter, setLineaFilter] = useState('');
   const [sesionSeleccionada, setSesionSeleccionada] = useState<string | null>(null);
@@ -832,7 +832,7 @@ function EnVivoContenido() {
                     <div className="qv-live-toast qv-live-toast--info">
                       <CheckCircle2 size={14} aria-hidden="true" className="qv-live-toast__ico--ok" />
                       <span>Sesión finalizada</span>
-                      {enlacesAdmin && (
+                      {puedeVerDias && (
                         <button
                           type="button"
                           className="qv-live-toast__btn"
@@ -920,7 +920,8 @@ function EnVivoContenido() {
               trazaRecibidoEn={traza.dataUpdatedAt}
               posicionesRecibidoEn={posiciones.dataUpdatedAt}
               soloLectura={soloLectura}
-              enlacesAdmin={enlacesAdmin}
+              puedeVerDias={puedeVerDias}
+              puedeVerConductores={puedeVerConductores}
             />
           </div>
         )}

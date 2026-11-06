@@ -6,7 +6,7 @@ const { tx, auditCreate, sindicatoFind, txRunner } = vi.hoisted(() => {
   const sindicatoFind = vi.fn();
   const tx = {
     sindicato: { findUnique: sindicatoFind },
-    user: { findUnique: vi.fn(), create: vi.fn() },
+    user: { create: vi.fn() },
     account: { create: vi.fn() },
     auditLog: { create: auditCreate },
   };
@@ -38,7 +38,6 @@ describe('AuthService.crearUsuarioComoAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sindicatoFind.mockResolvedValue({ id: SINDICATO });
-    tx.user.findUnique.mockResolvedValue(null);
     tx.user.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...data }));
     txRunner.mockImplementation(async (_ctx: unknown, cb: (t: typeof tx) => unknown) => cb(tx));
   });
@@ -53,10 +52,10 @@ describe('AuthService.crearUsuarioComoAdmin', () => {
     expect(auditCreate.mock.calls[0]?.[0].data).toMatchObject({ entidad: 'usuario', accion: 'crear', sindicatoId: SINDICATO });
   });
 
-  it('409 si el email ya existe, sin crear nada', async () => {
-    tx.user.findUnique.mockResolvedValue({ id: 'otro' });
+  it('409 si el email ya existe (unique de user.email), sin crear cuenta', async () => {
+    tx.user.create.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
     await expect(new AuthService().crearUsuarioComoAdmin(actor, datos)).rejects.toBeInstanceOf(ConflictException);
-    expect(tx.user.create).not.toHaveBeenCalled();
+    expect(tx.account.create).not.toHaveBeenCalled();
   });
 
   it('409 si pierde la carrera contra otro alta (unique de email)', async () => {
