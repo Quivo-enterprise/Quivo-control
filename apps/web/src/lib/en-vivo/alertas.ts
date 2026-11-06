@@ -273,3 +273,10 @@ export function resumenAlertasDia(
   if (abiertasHoy === 0) return { texto: 'Sin infracciones abiertas', boton: 'siguiente' };
   return { texto: textoAlertasAbiertas(abiertasHoy), boton: puedeVerAlertas ? 'enlace' : 'oculto' };
 }
+
+/** Conteo de alertas por gravedad (chips del celular) sobre la lista que se le pase; el nivel sin alertas cuenta 0. */
+export function cuentaPorGravedad(infracciones: readonly Pick<Infraccion, 'gravedad'>[]): Record<GravedadRegla, number> {
+  const cuenta: Record<GravedadRegla, number> = { gravisima: 0, grave: 0, leve: 0 };
+  for (const i of infracciones) cuenta[i.gravedad] += 1;
+  return cuenta;
+}

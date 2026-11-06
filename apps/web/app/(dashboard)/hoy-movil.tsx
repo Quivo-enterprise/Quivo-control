@@ -8,12 +8,12 @@ import { formatearTelefonoBolivia } from '@quivo/shared';
 import { ChevronRight, Clock, MessageCircle, Phone, Search } from 'lucide-react';
 import { useAuth } from '../../src/lib/auth/auth-context';
 import { conductoresApi } from '../../src/lib/api/conductores';
-import { sancionesApi } from '../../src/lib/api/sanciones';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
 import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useReloj } from '../../src/lib/en-vivo/use-reloj';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
+import { LIMITE_SANCIONES_API, useSancionesPendientes } from '../../src/lib/hoy/use-sanciones-pendientes';
 import { useSaludRefresco } from '../../src/lib/en-vivo/use-salud-refresco';
 import { BUSQUEDA_MIN, buscarHoy, estadoVehiculoHoy, fechaHoy, haceCorto, normalizarBusqueda, posicionDeVehiculo } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
@@ -32,9 +32,6 @@ interface Kpi {
   valor: number | string | null;
   href?: string;
 }
-
-/** Tope de filas de `GET /sanciones` (LIMITE_FILAS en la API): con tantas, el conteo real es mayor. */
-const LIMITE_SANCIONES_API = 200;
 
 function TarjetaKpi({ kpi }: { kpi: Kpi }) {
   // Comp B: el número va primero y la etiqueta debajo.
@@ -111,14 +108,7 @@ export function HoyMovil() {
   const posiciones = usePosicionesEnVivo(token, INTERVALO_HOY_MS);
   const jornadas = useJornadasHoy(token, buscando);
   const alertas = useInfraccionesHoy(token);
-  // Todas las pendientes (sin filtro de fecha). La API devuelve como máximo 200 filas y sin total.
-  const sanciones = useQuery({
-    queryKey: ['hoy', 'sanciones-pendientes'],
-    enabled: Boolean(token),
-    queryFn: () => sancionesApi.listar(token as string, { estado: 'pendiente' }),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-  });
+  const sanciones = useSancionesPendientes(token);
 
   const vehiculos = useQuery({
     queryKey: ['hoy', 'vehiculos'],

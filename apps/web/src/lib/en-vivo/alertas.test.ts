@@ -23,6 +23,7 @@ import {
   urlWhatsapp,
   velocidadKmh,
   aplicarResueltas,
+  cuentaPorGravedad,
 } from './alertas';
 import { etiquetaAlerta } from '../../../../../packages/design-system/src/ui/route-map-vehiculo';
 
@@ -294,5 +295,13 @@ describe('resumenAlertasDia', () => {
   it('un filtro de vista no cambia lo alcanzable: con alcanzables > 0 sigue "Siguiente alerta"', () => {
     expect(resumenAlertasDia(3, 2, false)).toEqual({ texto: null, boton: 'siguiente' });
     expect(resumenAlertasDia('error', 2, true)).toEqual({ texto: null, boton: 'siguiente' });
+  });
+});
+
+describe('alertas del celular: conteo por gravedad', () => {
+  it('cuenta lo que se le pase y deja en 0 el nivel sin alertas', () => {
+    const lista = [{ gravedad: 'leve' as const }, { gravedad: 'leve' as const }, { gravedad: 'gravisima' as const }];
+    expect(cuentaPorGravedad(lista)).toEqual({ gravisima: 1, grave: 0, leve: 2 });
+    expect(cuentaPorGravedad([])).toEqual({ gravisima: 0, grave: 0, leve: 0 });
   });
 });
