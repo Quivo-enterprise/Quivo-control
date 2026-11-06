@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Conductor, JornadaVehiculo, PosicionEnVivo, Vehiculo } from '@quivo/shared';
-import { buscarHoy, estadoVehiculoHoy, fechaHoy, haceCorto, normalizarBusqueda, posicionDeVehiculo } from './hoy.logic';
+import { INSIGNIA, buscarHoy, estadoVehiculoHoy, fechaHoy, haceCorto, kmhSiReportando, normalizarBusqueda, posicionDeVehiculo } from './hoy.logic';
 
 const veh = (id: string, placa: string) => ({ id, placa }) as Vehiculo;
 const cond = (id: string, nombre: string, telefono: string | null) => ({ id, nombre, telefono }) as Conductor;
@@ -99,5 +99,18 @@ describe('estadoVehiculoHoy', () => {
   });
   it('estado desconocido cae a sin datos (neutro)', () => {
     expect(estadoVehiculoHoy(posi({ estadoFrescura: 'raro' as never }))).toMatchObject({ insignia: 'inactive', etiqueta: 'Sin datos' });
+  });
+});
+
+describe('kmhSiReportando', () => {
+  it('solo reportando muestra la velocidad', () => {
+    expect(kmhSiReportando('reportando', 31)).toBe(31);
+    expect(kmhSiReportando('reportando', null)).toBeNull();
+    expect(kmhSiReportando('detenido', 0)).toBeNull();
+    expect(kmhSiReportando('perdido', 40)).toBeNull();
+  });
+  it('INSIGNIA cubre cada estado con una forma', () => {
+    expect(INSIGNIA.reportando).toBe('active');
+    expect(INSIGNIA.en_pausa).toBe('warning');
   });
 });

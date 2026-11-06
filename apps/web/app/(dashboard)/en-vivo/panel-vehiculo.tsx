@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { colorTextoContraste, MOBILE_QUERY } from '@quivo/design-system';
+import { colorTextoContraste, MOBILE_QUERY, PlateBadge, StatusBadge } from '@quivo/design-system';
 import { formatearTelefonoBolivia } from '@quivo/shared';
 import {
   Bus,
@@ -55,6 +55,8 @@ import {
   useOpcionesDesignacion,
 } from '../../../src/lib/en-vivo/use-en-vivo';
 import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
+import { INSIGNIA, kmhSiReportando } from '../../../src/lib/hoy/hoy.logic';
+import { useEsMovil } from '../../../src/lib/use-es-movil';
 import {
   antiguedadViva,
   formatearAntiguedad,
@@ -155,6 +157,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     soloLectura,
   } = props;
   const queryClient = useQueryClient();
+  const esMovil = useEsMovil();
   const infracciones = useInfraccionesSesion(token, sesionId);
   // shortcut: si llegan varias incidencias entre aperturas del panel, solo la última entra en vivo; las intermedias aparecen al reabrir; pasar incidencias a su propia query si molesta
   const incidencias = contexto ? incidenciasVisibles(contexto.incidencias, posicion?.ultimaIncidencia) : [];
@@ -323,6 +326,34 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
     }
   }
 
+  const seccionVuelta = (
+  <SeccionVuelta
+    movil={esMovil}
+    posicion={posicion}
+    variantes={variantes.data}
+    variantesError={variantes.isError && !variantes.data}
+    puntos={puntos.data}
+    linea={molinos.data?.lineas.find((l) => l.lineaId === (posicion?.lineaId ?? contexto?.linea.id))}
+    molinosServidorTs={molinos.data?.servidorTs}
+    molinosRecibidoEn={molinos.dataUpdatedAt}
+    posicionesServidorTs={posicion?.servidorTs}
+    posicionesRecibidoEn={posicionesRecibidoEn}
+    onDesignar={async (varianteId, varianteNombre) => {
+      // Un rechazo se propaga a la sección, que lo muestra y anuncia en línea (no va al aviso).
+      const res = await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
+      const nombre = varianteNombre ?? 'Molinos';
+      onAviso({
+        tono: 'ok',
+        texto: !varianteId
+          ? 'Designación cancelada'
+          : res.aplica === 'proxima_vuelta'
+            ? `Va a ${nombre} en la próxima vuelta`
+            : `Vuelta designada: ${nombre}`,
+      });
+    }}
+  />
+  );
+
   return (
     <section
       className="qv-live-panel"
@@ -388,6 +419,70 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         </span>
       </button>
 
+      {esMovil && (
+        <div className="qv-live-panel__m">
+          <div className="qv-live-panel__m-top">
+            <h2 ref={tituloRef} tabIndex={-1} className="qv-live-panel__placa qv-live-panel__placa--m">
+              <PlateBadge plate={placa} size="lg" />
+            </h2>
+            {lineaNombre && <span className="qv-live-panel__m-tag">{lineaNombre}</span>}
+            {fotoUrl && fotoRota !== fotoUrl && (
+              <img
+                className="qv-live-panel__m-foto"
+                src={fotoUrl}
+                alt=""
+                width={40}
+                height={40}
+                loading="lazy"
+                decoding="async"
+                onError={() => setFotoRota(fotoUrl)}
+              />
+            )}
+            <button type="button" className="qv-live-panel__cerrar" onClick={onCerrar} aria-label="Cerrar detalle del vehículo" title="Cerrar">
+              <X size={22} aria-hidden="true" />
+            </button>
+          </div>
+          {conductor && <p className="qv-live-panel__m-conductor">{conductor}</p>}
+          <EstadoMovil
+            datos={datos}
+            posicion={posicion}
+            kmh={kmh}
+            recibidoEn={trazaRecibidoEn}
+            posicionesRecibidoEn={posicionesRecibidoEn}
+          />
+          {fueraDelMapa && (
+            <p className="qv-live-panel__aviso" role="status">
+              El vehículo ya no está en el mapa.
+            </p>
+          )}
+          <div className="qv-live-panel__m-stats">
+            <div className="qv-live-panel__m-stat">
+              <small>Hoy</small>
+              <b>{posicion?.vuelta ? `Vuelta ${posicion.vuelta.numero}` : '—'}</b>
+            </div>
+            <div className={`qv-live-panel__m-stat${abiertas.length > 0 ? ' qv-live-panel__m-stat--al' : ''}`}>
+              <small>Alertas</small>
+              <b>{`${abiertas.length} abierta${abiertas.length === 1 ? '' : 's'}`}</b>
+            </div>
+          </div>
+          {seccionVuelta}
+          <div className="qv-live-panel__m-acciones">
+            {telefono && urlTel && (
+              <a className="qv-live-panel__m-btn qv-live-panel__m-btn--pri" href={urlTel}>
+                <Phone size={22} aria-hidden="true" />
+                Llamar
+              </a>
+            )}
+            <Link className="qv-live-panel__m-btn" href={`/reportes/recorridos/${sesionId}`}>
+              <Route size={22} aria-hidden="true" />
+              Ver recorrido
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {!esMovil && (
+      <>
       <div className="qv-live-panel__cabecera">
         <span className="qv-live-panel__avatar" aria-hidden="true">
           {fotoUrl && fotoRota !== fotoUrl ? (
@@ -428,9 +523,11 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
           ? ` · Vuelta ${posicion.vuelta.numero} · ${posicion.vuelta.varianteNombre ?? (posicion.vuelta.varianteId ? 'Molinos' : 'Directo')}`
           : ''}
       </p>
+      </>
+      )}
 
       <div id="qv-live-panel-cuerpo" className="qv-live-panel__cuerpo">
-      {fueraDelMapa && (
+      {fueraDelMapa && !esMovil && (
         <p className="qv-live-panel__aviso" role="status">
           El vehículo ya no está en el mapa.
         </p>
@@ -447,17 +544,19 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
           <Navigation size={14} aria-hidden="true" />
           Seguir
         </button>
-        <Link className="qv-live-btn" href={`/reportes/recorridos/${sesionId}`}>
-          <Route size={14} aria-hidden="true" />
-          Ver recorrido
-        </Link>
+        {!esMovil && (
+          <Link className="qv-live-btn" href={`/reportes/recorridos/${sesionId}`}>
+            <Route size={14} aria-hidden="true" />
+            Ver recorrido
+          </Link>
+        )}
         {telefono && urlWa && (
           <a className="qv-live-btn" href={urlWa} target="_blank" rel="noopener noreferrer">
             <MessageCircle size={14} aria-hidden="true" />
             WhatsApp
           </a>
         )}
-        {telefono && urlTel && (
+        {!esMovil && telefono && urlTel && (
           <a className="qv-live-btn" href={urlTel}>
             <Phone size={14} aria-hidden="true" />
             Llamar
@@ -480,30 +579,7 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
         </span>
       )}
 
-      <SeccionVuelta
-        posicion={posicion}
-        variantes={variantes.data}
-        variantesError={variantes.isError && !variantes.data}
-        puntos={puntos.data}
-        linea={molinos.data?.lineas.find((l) => l.lineaId === (posicion?.lineaId ?? contexto?.linea.id))}
-        molinosServidorTs={molinos.data?.servidorTs}
-        molinosRecibidoEn={molinos.dataUpdatedAt}
-        posicionesServidorTs={posicion?.servidorTs}
-        posicionesRecibidoEn={posicionesRecibidoEn}
-        onDesignar={async (varianteId, varianteNombre) => {
-          // Un rechazo se propaga a la sección, que lo muestra y anuncia en línea (no va al aviso).
-          const res = await designar.mutateAsync({ sesionId, varianteId, varianteNombre });
-          const nombre = varianteNombre ?? 'Molinos';
-          onAviso({
-            tono: 'ok',
-            texto: !varianteId
-              ? 'Designación cancelada'
-              : res.aplica === 'proxima_vuelta'
-                ? `Va a ${nombre} en la próxima vuelta`
-                : `Vuelta designada: ${nombre}`,
-          });
-        }}
-      />
+      {!esMovil && seccionVuelta}
 
       <div className="qv-live-panel__seccion">
         <h3 className="qv-live-panel__h">
@@ -733,6 +809,39 @@ function FrescuraPanel({
       </span>
       <span className="qv-live-panel__tabular">· hace {formatearAntiguedad(antiguedadFix)}</span>
     </span>
+  );
+}
+
+/** Línea de estado de la hoja en el celular: forma + color del estado, "Reportando · 31 km/h" (km/h solo reportando). */
+function EstadoMovil({
+  datos,
+  posicion,
+  kmh,
+  recibidoEn,
+  posicionesRecibidoEn,
+}: {
+  datos: TrazaAcumulada | undefined;
+  posicion: PosicionEnVivo | undefined;
+  kmh: number | null;
+  recibidoEn: number;
+  posicionesRecibidoEn: number;
+}) {
+  const ahora = useReloj(1_000);
+  const fuente = datos ?? posicion;
+  if (!fuente) return null;
+  const estado = estadoDe(fuente);
+  const velocidad = kmhSiReportando(estado, kmh);
+  const antiguedadFix = antiguedadViva(fuente.ultimoFixTs, fuente.servidorTs, datos ? recibidoEn : posicionesRecibidoEn, ahora);
+  return (
+    <p className="qv-live-panel__m-estado">
+      <StatusBadge status={INSIGNIA[estado]} label={`${presentacionFrescura(fuente.estadoFrescura).etiqueta}${sufijoPausa(fuente)}`} />
+      {velocidad !== null && (
+        <span>
+          · <strong>{velocidad}</strong> km/h
+        </span>
+      )}
+      {fuente.ultimoFixTs && <span className="qv-live-panel__m-hace">· hace {formatearAntiguedad(antiguedadFix)}</span>}
+    </p>
   );
 }
 

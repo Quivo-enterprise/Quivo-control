@@ -4748,9 +4748,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     background: var(--qv-surface-card);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    border-radius: var(--qv-radius-xl) var(--qv-radius-xl) 0 0;
-    padding: 0.5rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
+    border-radius: 26px 26px 0 0;
+    padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px));
     border-bottom: none;
+    box-shadow: 0 -10px 28px rgb(15 23 42 / 0.22);
     /* El asa sticky (2.75 rem) no debe tapar el control que recibe el foco al desplazar la hoja. */
     scroll-padding-top: 2.75rem;
   }
@@ -4765,7 +4766,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     justify-content: center;
     gap: 0.5rem;
     min-height: 2.75rem;
-    margin: -0.5rem -1rem 0;
+    margin: -10px -16px 6px;
     padding: 0;
     border: 0;
     background: var(--qv-surface-card);
@@ -4778,15 +4779,15 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     outline-offset: -4px;
   }
   .qv-live-panel__asa-barra {
-    width: 2.5rem;
-    height: 4px;
-    border-radius: 2px;
+    width: 44px;
+    height: 5px;
+    border-radius: 3px;
     background: var(--qv-border-strong, var(--qv-color-border));
   }
   /* Plegada: solo asa + cabecera + resumen; el mapa queda a la vista. */
   .qv-live-panel[data-hoja='plegada'] {
     gap: 0.4rem;
-    padding-bottom: calc(0.6rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   }
   .qv-live-panel[data-hoja='plegada'] .qv-live-panel__cuerpo {
     display: none;
@@ -4811,6 +4812,166 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   .qv-live-panel__cerrar {
     width: 2.75rem;
     height: 2.75rem;
+  }
+  /* Hoja del diseño B: cerrar = cuadrado con borde de 48 px (comp .btn.ghost.sq). */
+  .qv-live-panel__m-top .qv-live-panel__cerrar {
+    width: 48px;
+    height: 48px;
+    margin-left: auto;
+    border: 1.5px solid var(--qv-border-strong);
+    border-radius: 12px;
+    background: var(--qv-surface-card);
+    color: var(--qv-text-primary);
+  }
+  .qv-live-panel__m {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .qv-live-panel__m-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .qv-live-panel__placa--m {
+    line-height: 1;
+  }
+  .qv-live-panel__m-tag {
+    padding: 1px 8px;
+    border-radius: 8px;
+    border: 1.5px solid var(--qv-border-strong);
+    background: var(--qv-surface-soft);
+    color: var(--qv-text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .qv-live-panel__m-foto {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--qv-panel-linea, var(--qv-color-primary));
+  }
+  .qv-live-panel__m-conductor {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+  .qv-live-panel__m-estado {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 6px;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .qv-live-panel__m-estado .qv-status-badge {
+    font-weight: 700;
+  }
+  .qv-live-panel__m-hace {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--qv-text-secondary);
+  }
+  .qv-live-panel__m-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .qv-live-panel__m-stat {
+    padding: 8px 12px;
+    border: 1.5px solid var(--qv-border-subtle);
+    border-radius: 14px;
+    background: var(--qv-surface-sunken);
+  }
+  .qv-live-panel__m-stat small {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--qv-text-secondary);
+  }
+  .qv-live-panel__m-stat b {
+    font-family: var(--qv-font-display);
+    font-size: 20px;
+    font-weight: 800;
+  }
+  /* Con alertas abiertas: rojo (la forma la da el texto "N abiertas", el color refuerza). */
+  .qv-live-panel__m-stat--al {
+    background: color-mix(in srgb, var(--qv-color-danger) 12%, var(--qv-surface-card));
+    border-color: var(--qv-color-danger);
+  }
+  .qv-live-panel__m-stat--al b {
+    color: var(--qv-estado-perdido-texto);
+  }
+  /* Designación (comp .seg): sin recuadro de sección, control grande de 2 px violeta. */
+  .qv-vuelta--movil {
+    padding-top: 0;
+    border-top: 0;
+    gap: 6px;
+  }
+  .qv-vuelta--movil .qv-live-panel__h {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--qv-text-primary);
+  }
+  .qv-vuelta--movil .qv-vuelta__segmentos {
+    flex-wrap: nowrap;
+    gap: 0;
+    padding: 3px;
+    border: 2px solid var(--qv-color-primary-soft);
+    border-radius: 14px;
+    background: var(--qv-color-primary-subtle);
+  }
+  .qv-vuelta--movil .qv-vuelta__segmento {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: 1 1 0;
+    min-height: 46px;
+    border-radius: 11px;
+    font-size: 16px;
+  }
+  .qv-vuelta--movil .qv-vuelta__segmento[aria-checked='true'] {
+    font-weight: 800;
+  }
+  .qv-live-panel__m-acciones {
+    display: flex;
+    gap: 10px;
+  }
+  .qv-live-panel__m-btn {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 52px;
+    padding: 0 14px;
+    border-radius: 14px;
+    border: 2px solid var(--qv-color-primary);
+    background: var(--qv-surface-card);
+    color: var(--qv-color-primary);
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .qv-live-panel__m-btn--pri {
+    background: var(--qv-color-primary);
+    color: var(--qv-color-on-primary);
+  }
+  .qv-live-panel__m-btn:focus-visible {
+    outline: 2px solid var(--qv-color-primary);
+    outline-offset: 2px;
   }
   .qv-live-panel__plegar-h {
     min-height: 2.75rem;
@@ -5963,11 +6124,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 
   /* La tabbar ya reserva el inset inferior: la hoja no lo suma otra vez. */
-  .qv-admin-layout--tabs .qv-live-panel {
-    padding-bottom: 0.9rem;
-  }
+  .qv-admin-layout--tabs .qv-live-panel,
   .qv-admin-layout--tabs .qv-live-panel[data-hoja='plegada'] {
-    padding-bottom: 0.6rem;
+    padding-bottom: 14px;
   }
 }
 

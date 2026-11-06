@@ -31,6 +31,8 @@ interface SeccionVueltaProps {
   posicionesRecibidoEn: number;
   /** Designa (`varianteId`) o cancela (`null`). Rechaza con el error de la API (409 = motivo). */
   onDesignar: (varianteId: string | null, nombre: string | null) => Promise<void>;
+  /** Celular (diseño B): título "Designación" y marca de check en la opción activa. */
+  movil?: boolean;
 }
 
 /** Sección "Vuelta N de hoy" del panel del vehículo: designación a Molinos, acuse y espera. */
@@ -127,9 +129,11 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
   }
 
   return (
-    <div className="qv-live-panel__seccion qv-vuelta" role="group" aria-labelledby={idTitulo}>
+    <div className={`qv-live-panel__seccion qv-vuelta${props.movil ? ' qv-vuelta--movil' : ''}`} role="group" aria-labelledby={idTitulo}>
       <h3 className="qv-live-panel__h">
-        <span id={idTitulo}>{vuelta ? `Vuelta ${vuelta.numero} de hoy` : 'Vuelta de hoy'}</span>
+        <span id={idTitulo}>
+          {props.movil ? 'Designación' : vuelta ? `Vuelta ${vuelta.numero} de hoy` : 'Vuelta de hoy'}
+        </span>
         {sugerido && !bloqueado && <span className="qv-vuelta__chip">Sugerido</span>}
       </h3>
 
@@ -176,6 +180,7 @@ export function SeccionVuelta(props: SeccionVueltaProps) {
                   onFocus={() => setFoco(i)}
                   onKeyDown={(e) => onKeyDown(e, i)}
                 >
+                  {props.movil && activo && <Check size={18} aria-hidden="true" />}
                   {item.etiqueta}
                 </button>
               );

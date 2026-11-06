@@ -1234,6 +1234,108 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
+  test('En vivo: hoja del vehículo (diseño B): placa, estado, tarjetas, designación y acciones', async () => {
+    test.setTimeout(120_000);
+    const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
+    const sesionId = id(1), vehiculoId = id(2), rutaId = id(5), molinos = id(7);
+    const pos = {
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
+      totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 1,
+      vuelta: { numero: 2, varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
+    };
+    const contexto = {
+      sesion: { id: sesionId, inicio: new Date().toISOString(), fin: null, estado: 'activa', deviceId: 'd1' },
+      vehiculo: { id: vehiculoId, placa: '4701EHA' },
+      conductor: { id: id(3), nombre: 'Bravo Soliz J.', telefono: '+59171234567' },
+      linea: { id: id(4), nombre: 'Línea 16', color: '#7c3aed' },
+      ruta: { id: rutaId, geometria: { type: 'LineString', coordinates: [[-66.3, -17.38], [-66.29, -17.37]] } },
+      variantes: [], puntosControl: [], puntoEsperaPorVariante: {}, incidencias: [], servidorTs: new Date().toISOString(),
+    };
+    const variantes = [{ id: molinos, rutaId, nombre: 'Vía Molinos', estado: 'activo', puntoEsperaId: id(8), geometria: null }];
+    const alerta = (n: number) => ({
+      sindicatoId: id(1), vehiculoId, conductorId: id(3), lineaId: id(4), rutaId, reglaId: null, finTs: null,
+      lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
+      id: id(100 + n), sesionId, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
+      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    });
+    let abiertas = [alerta(1)];
+    const designaciones: unknown[] = [];
+    await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
+    await page.route(`**/v1/reportes/en-vivo/${sesionId}/contexto`, (r) => r.fulfill({ json: contexto }));
+    await page.route(`**/v1/rutas/${rutaId}/variantes`, (r) => r.fulfill({ json: variantes }));
+    await page.route(`**/v1/rutas/${rutaId}/puntos-control`, (r) => r.fulfill({ json: [] }));
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: abiertas }));
+    await page.route(`**/v1/reportes/en-vivo/${sesionId}/infracciones*`, (r) => r.fulfill({ json: abiertas }));
+    await page.route('**/v1/infracciones*', (r) => r.fulfill({ json: abiertas }));
+    await page.route(`**/v1/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`, (r) => {
+      designaciones.push(r.request().postDataJSON());
+      return r.fulfill({ json: { ...pos.vuelta, id: id(9), sindicatoId: id(1), sesionId, estado: 'en_curso', inicioTs: new Date().toISOString(), finTs: null, pasoRetornoTs: null, designadaPor: null, esperaLlegadaTs: null, esperaSalidaTs: null, varianteId: molinos, varianteNombre: 'Vía Molinos', aplica: 'vuelta_actual' } });
+    });
+    const abrir = async () => {
+      await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+    };
+    try {
+      await abrir();
+      const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+      // Placa grande del diseño B, línea como etiqueta junto a ella.
+      await expect(hoja.locator('.qv-plate--lg')).toHaveText(/4701EHA/);
+      await expect(hoja.locator('.qv-live-panel__m-tag')).toHaveText('Línea 16');
+      await expect(hoja.locator('.qv-live-panel__m-conductor')).toHaveText('Bravo Soliz J.');
+      // Estado con forma + texto; km/h solo reportando (8,6 m/s = 31 km/h).
+      await expect(hoja.locator('.qv-live-panel__m-estado')).toContainText(/Reportando\s*· 31 km\/h/);
+      // Tarjetas: vuelta y alertas (rojas con alertas abiertas).
+      const tarjetas = hoja.locator('.qv-live-panel__m-stat');
+      await expect(tarjetas.nth(0)).toContainText('Vuelta 2');
+      await expect(tarjetas.nth(1)).toContainText('1 abierta');
+      await expect(tarjetas.nth(1)).toHaveClass(/qv-live-panel__m-stat--al/);
+      // Designación: opciones y cambio vía API (mock).
+      const grupo = hoja.getByRole('radiogroup');
+      await expect(grupo.getByRole('radio', { name: 'Directo' })).toBeChecked();
+      await grupo.getByRole('radio', { name: 'Vía Molinos' }).click();
+      await expect.poll(() => designaciones.length).toBe(1);
+      expect(designaciones[0]).toEqual({ varianteId: molinos });
+      // Acciones primarias plegada: Llamar tel: y Ver recorrido.
+      await expect(hoja.getByRole('link', { name: 'Llamar' })).toHaveAttribute('href', 'tel:+59171234567');
+      await expect(hoja.getByRole('link', { name: 'Ver recorrido' })).toHaveAttribute('href', `/reportes/recorridos/${sesionId}`);
+      // Abre expandida: WhatsApp/Copiar/Seguir y las infracciones están al alcance; plegada solo queda el resumen.
+      await expect(hoja.getByRole('link', { name: 'WhatsApp' })).toBeVisible();
+      await expect(hoja.getByRole('button', { name: 'Copiar' })).toBeVisible();
+      await expect(hoja.getByRole('button', { name: 'Seguir' })).toBeVisible();
+      await expect(hoja.getByRole('heading', { name: 'Infracciones' })).toBeVisible();
+      const altoExpandida = (await hoja.boundingBox())!.height;
+      await hoja.getByRole('button', { name: 'Plegar detalle para ver el mapa' }).click();
+      await expect(hoja.getByRole('link', { name: 'WhatsApp' })).toBeHidden();
+      await expect(hoja.getByRole('link', { name: 'Llamar' })).toBeVisible();
+      const altoPlegada = (await hoja.boundingBox())!.height;
+      console.log(`hoja: plegada ${altoPlegada}px, expandida ${altoExpandida}px`);
+      const tabbar = (await page.getByRole('navigation', { name: 'Pestañas', exact: true }).boundingBox())!;
+      const cajaHoja = (await hoja.boundingBox())!;
+      expect(cajaHoja.y + cajaHoja.height).toBeLessThanOrEqual(tabbar.y + 1);
+      // Escape cierra y el foco no cae a <body>.
+      const cerrar = hoja.getByRole('button', { name: 'Cerrar detalle del vehículo' });
+      const caja = (await cerrar.boundingBox())!;
+      expect(Math.round(caja.width)).toBe(48);
+      expect(Math.round(caja.height)).toBe(48);
+      await cerrar.focus();
+      await page.keyboard.press('Escape');
+      await expect(hoja).toHaveCount(0);
+      // Cerrar con el botón.
+      await abrir();
+      await page.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();
+      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toHaveCount(0);
+      // Sin alertas: tarjeta neutra.
+      abiertas = [];
+      await abrir();
+      const neutra = page.getByLabel('Detalle del vehículo 4701EHA').locator('.qv-live-panel__m-stat').nth(1);
+      await expect(neutra).toContainText('0 abiertas');
+      await expect(neutra).not.toHaveClass(/qv-live-panel__m-stat--al/);
+    } finally {
+      for (const u of ['**/v1/reportes/en-vivo/posiciones*', `**/v1/reportes/en-vivo/${sesionId}/contexto`, `**/v1/rutas/${rutaId}/variantes`, `**/v1/rutas/${rutaId}/puntos-control`, '**/v1/reportes/en-vivo/infracciones*', `**/v1/reportes/en-vivo/${sesionId}/infracciones*`, '**/v1/infracciones*', `**/v1/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`]) await page.unroute(u);
+    }
+  });
+
   test('En vivo: sin contadores de alerta sobre el mapa; el admin las ve en la pestaña Alertas y el resumen en el menú ⋯', async () => {
     test.setTimeout(90_000);
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
