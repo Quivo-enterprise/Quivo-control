@@ -146,12 +146,25 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - Verificado en prod (Playwright, Pixel 7, cuenta admin_quivo): Hoy, En vivo, Salidas, Alertas y Más con el diseño B y la barra de pestañas, overflow 0, sin errores de consola salvo el aviso de Google Maps "Vector Map… Falling back to Raster" (WebGL del navegador headless).
     - **Delegado (admin_sindicato) ve todos los trufis:** prod tiene 1 sindicato con los 45 vehículos; `/reportes/en-vivo/posiciones` filtra solo por sindicato (RLS, `withTenantContext`, límite 500). A las 03:20 (hora Bolivia) no había sesiones activas: **no se vio con trufis en vivo** ni con la cuenta del delegado (no hay credenciales suyas aquí). Verificar en la mañana con la cuenta del delegado: el chip "N de M" debe contar todas las sesiones del día. Un trufi sin sesión hoy no aparece en el mapa (regla previa).
     - Marcadores píldora sobre el Google Maps real: no verificados (sin vehículos en vivo).
-  - **Pendientes que salieron en la revisión (fuera de los PRs):**
-    - `mobile.spec.ts` usa datos reales (nombre de chofer y placas como 4701EHA) en mocks: pasar a datos ficticios.
-    - `StatusBadge` `idle` en el celular: texto #94a3b8 sobre blanco (~2.6:1), bajo contraste ("Esperando").
-    - `touch-action: manipulation` falta en la lista de Más y en Salir.
-    - Unificar `MenuFila` con `MenuAcciones`; borrar el drawer móvil sin uso; `conductorNombre` en el API de la fila; separar un `CabeceraMovil` de las ramas `esMovil`.
-    - No verificado: dispositivo físico, modo oscuro, iOS.
+  - **Pendientes de la revisión: cerrados el 6/11 (#325–#327, desplegados en r39).**
+    - **#325 (`e68c275`):** la hoja plegada oculta tarjetas y Designación a cualquier alto (a 412×915 tapaba medio mapa). Además: "Cargando…" solo mientras carga, el título tiene nombre accesible aunque falte la placa, `MOBILE_QUERY` es el único criterio de celular y se quitaron duplicados.
+      - Revisión: `/code-review` medium sobre #323 (10 hallazgos, 6 aplicados) y `/ponytail-review` Ship.
+      - Descartados con motivo: la designación con rol de solo lectura no aplica, porque el operador designa por decisión del CTO (`soloLectura` es solo para infracciones); km/h y estado de fuentes distintas, igual que escritorio.
+      - **Riesgo conocido:** al rotar el teléfono (cruzar 720 px) se pierden el error inline de designación y el foco del título.
+    - **#326 (`e892462`):**
+      - Datos ficticios en specs y tests unitarios (9001TST…, "Pérez Prueba Ana").
+      - Etiquetas de `StatusBadge` con tokens `--qv-estado-*-texto`, calculadas ≥ 5,1:1 en claro y ≥ 7,4:1 en oscuro. `pending` en oscuro pasa de 4,19 a 15,2 con `--qv-text-primary`; "Esperando" pasa de 2,3 a 6,9. Cambia también escritorio, solo las insignias.
+      - `touch-action: manipulation` en los objetivos táctiles que faltaban.
+      - Se borró el drawer móvil: era inalcanzable y `mobileTabs` ahora es obligatorio.
+      - `idle` e `inactive` quedan del mismo color; se distinguen por la etiqueta.
+    - **#327 (`d80fb89`):** la fila de salida trae `conductorNombre` desde el API, con `LEFT JOIN conductores` acotado por sindicato y sin N+1. El celular lo lee directo y se eliminó el poll de posiciones cada 30 s, que solo servía para el nombre.
+      - `/security-review` sin hallazgos: mismos roles que En vivo, la app del chofer no recibe el campo, RLS forzado. Test de integración cross-tenant con `NotFoundException`.
+      - **Orden de deploy:** API antes que web.
+    - **No se hace (decisión):** unificar `MenuFila` con `MenuAcciones`. Es un refactor sin cambio visible que toca el flujo de Despachar; se retoma si aparece un tercer menú. Separar `CabeceraMovil`, por lo mismo.
+    - No verificado: dispositivo físico, modo oscuro en pantalla (solo cálculo de contraste), iOS.
+  - **Deploy r39 (6/11, ~04:40 hora Bolivia, completo).** API `quivo-api-00057-b4r`, web `quivo-web-00027-sjs`, worker desplegado, imagen `r39-20261106` desde `d80fb89`. Migraciones ok (no había nuevas), `/v1/health/ready` ok.
+    - Rollback: web `quivo-web-00026-hdk` (r38), API `quivo-api-00055-rf7` (imagen r37).
+    - Verificado en prod (Playwright, Pixel 7, admin_quivo): Hoy, En vivo, Salidas, Alertas y Más con pestañas, overflow 0; `/salidas/:pc/fila` responde 200 con la query nueva (0 trufis en fila a esa hora, así que no se vio el nombre). Sin errores de consola salvo el aviso de WebGL del navegador headless.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
@@ -167,7 +180,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     3. Investigar el 401 del refresh con `/codex-debug diagnose` en paralelo con el diagnóstico propio, para descartar que les pase a choferes reales. Código: `apps/mobile/src/shared/api/auth-movil-api.ts` (`refresh`) y `AuthMovilService.refresh` en `apps/api/src/modules/auth-movil/auth-movil.service.ts`.
   - Con cualquiera de las tres, revisar que la vuelta simulada no le genere sanciones a 4701EHA.
 - `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
-- Deploy r37 hecho el 5/11 (`r37-20261105`). El 6/11 la web pasó a `r38-20261106`; API y worker siguen en r37.
+- Deploy r37 hecho el 5/11 (`r37-20261105`). El 6/11 la web pasó a `r38-20261106` y luego todo (API, web y worker) a `r39-20261106`.
 
 ## 2026-11-05: panel admin + En vivo en celular, instalable como PWA (A+B+C mergeados; deploy pendiente de OK)
 
