@@ -88,6 +88,10 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - No verificado: iOS, dispositivo real, mapa con clave de Google, dark mode.
   - **Codex: no verificado (sin cuota).** `verify-fix` corrió el 5/11 y salió con exit 3: "usage limit", vuelve el 2026-12-03 23:24. Las notas "Codex: no verificado" de G y H son previas y nunca se intentó correrlo. **Pendiente:** cuando vuelva la cuota, correr `verify-fix` sobre #303, #306 y #308; si encuentra algo, va en un PR nuevo.
 
+**Diseño B en el celular: NO está aplicado (5/11, noche).** El CTO abrió la PWA en r37 y vio el panel viejo responsive. D–H hicieron la estructura, pero no los tokens ni los componentes del comp B. Plan e inventario: `docs/plan-movil-diseno-b.md`. Decisiones: medidas del comp (fuera la base de 18 px), En vivo con dos chips y menú ⋯, y Más como página con todo. Son 10 PRs en orden y cada uno se compara con captura contra el comp.
+- PWA confirmada por el CTO en su celular: se instala y abre sin barra de URL.
+- 4701EHA era una sesión simulada por el CTO desde su emulador: el 401 de `refresh` baja de prioridad.
+
 **Pendiente de la capacitación del 5/11 (prod):**
 - **Sesión de 4701EHA: cerrada por r37 (#290).** Tras el deploy quedó `activa: false`, sin infracciones de hoy ni sanción pendiente. **Sigue pendiente la opción 3:** la causa del 401 en `refresh` no se investigó. Chofer real Javier Bravo Soliz, id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Antes del deploy seguía `activa` y su último fix era de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.
   - Logs de Cloud Run de ese teléfono: a las 14:15:51Z, `POST /mobile/auth/refresh` 201 (el token rota). A las 14:16:13Z, otro `refresh` → **401** con el token ya rotado, y enseguida `POST /sync/batches` → 401. Después no llega nada más: ni `/mobile/auth/logout` ni el fin de jornada. La app la da por muerta solo en el teléfono.
