@@ -140,7 +140,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
           fecha: AHORA,
           horario: 'manana',
           orden: n,
-          venceAt: new Date(AHORA.getTime() + 60 * MINUTO),
+          // venceAt y recorridoEstadoTs en tiempo real: el barrido de rotaciones.service.test (reglas A y B, en paralelo) no cierra estas sesiones.
+          venceAt: new Date(Math.max(AHORA.getTime(), Date.now()) + 60 * MINUTO),
           estado: 'vigente',
         },
       });
@@ -156,6 +157,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
           fin: spec.cerrada ? AHORA : null,
           revokedAt: spec.cerrada ? AHORA : null,
           recorridoEstado: spec.recorridoEstado === undefined ? 'en_curso' : spec.recorridoEstado,
+          recorridoEstadoTs: spec.recorridoEstado === null ? null : new Date(),
           accessTokenHash: randomUUID(),
           refreshTokenHash: randomUUID(),
           accessExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),

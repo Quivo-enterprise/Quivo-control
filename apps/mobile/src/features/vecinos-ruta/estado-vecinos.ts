@@ -1,4 +1,4 @@
-import { UMBRAL_VECINO_FRESCO_MS, type VecinoRuta } from '@quivo/shared';
+import { UMBRAL_VECINO_RUTA_FRESCO_MS, type VecinoRuta } from '@quivo/shared';
 
 export type Lado = 'delante' | 'detras';
 
@@ -20,7 +20,7 @@ export const FALLOS_PARA_AVISO = 2;
  */
 export function vecinoVisible(vecino: VecinoRuta | null, transcurridoMs = 0): vecino is VecinoRuta {
   if (!vecino) return false;
-  return vecino.edadFixS * 1000 + Math.max(0, transcurridoMs) <= UMBRAL_VECINO_FRESCO_MS;
+  return vecino.edadFixS * 1000 + Math.max(0, transcurridoMs) <= UMBRAL_VECINO_RUTA_FRESCO_MS;
 }
 
 /**
@@ -31,7 +31,7 @@ export function estadoFila(vecino: VecinoRuta | null, transcurridoMs = 0): Estad
   if (vecino) {
     return vecinoVisible(vecino, transcurridoMs) ? { tipo: 'vecino', vecino } : { tipo: 'sinDato' };
   }
-  return Math.max(0, transcurridoMs) <= UMBRAL_VECINO_FRESCO_MS
+  return Math.max(0, transcurridoMs) <= UMBRAL_VECINO_RUTA_FRESCO_MS
     ? { tipo: 'nadie' }
     : { tipo: 'sinDato' };
 }
