@@ -140,7 +140,8 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
           fecha: AHORA,
           horario: 'manana',
           orden: n,
-          venceAt: new Date(AHORA.getTime() + 60 * MINUTO),
+          // venceAt y recorridoEstadoTs en tiempo real: el barrido de rotaciones.service.test (reglas A y B, en paralelo) no cierra estas sesiones.
+          venceAt: new Date(Math.max(AHORA.getTime(), Date.now()) + 60 * MINUTO),
           estado: 'vigente',
         },
       });
@@ -156,6 +157,7 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
           fin: spec.cerrada ? AHORA : null,
           revokedAt: spec.cerrada ? AHORA : null,
           recorridoEstado: spec.recorridoEstado === undefined ? 'en_curso' : spec.recorridoEstado,
+          recorridoEstadoTs: spec.recorridoEstado === null ? null : new Date(),
           accessTokenHash: randomUUID(),
           refreshTokenHash: randomUUID(),
           accessExpiresAt: new Date(AHORA.getTime() + 60 * MINUTO),
@@ -228,11 +230,10 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     ts: Date,
     accuracy: number,
   ): Promise<void> {
-    // ultimo_ingreso_ts = now() real (no ts): el barrido global de rotaciones.service.test cierra sesiones sin actividad real >3 h.
     await tx.$executeRaw`
       INSERT INTO gps_sesion_resumen
         (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
-      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, now(), ${pos.lat}, ${pos.lng}, ${accuracy}, 8, now())
+      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, ${ts}::timestamptz, ${pos.lat}, ${pos.lng}, ${accuracy}, 8, now())
       ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
         ultimo_fix_ts = EXCLUDED.ultimo_fix_ts, lat = EXCLUDED.lat, lng = EXCLUDED.lng
     `;
