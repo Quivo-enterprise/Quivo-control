@@ -6,6 +6,108 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## 2026-11-06: barra blanca en Chrome 95, sesión del panel estable y rol `delegado`
+
+Pedidos del CTO (6/11):
+- "En el panel móvil del delegado le sale la barra blanca lateral derecha y le tapa la pantalla."
+- "Crea una credencial para delegado, que solo sea en vivo, alertas, salidas y hoy, y que deje de cerrarse la sesión después de un tiempo."
+
+**#333 — barra blanca (`9bb098d`, `ci` y `acceptance` en verde).**
+- Causa, verificada en los logs: el celular del delegado es un Xiaomi M2102J20SG con **Chrome 95 real** (Android 12). Los 500 de 500 hits con ese UA son de ese modelo.
+  - Chrome 95 no entiende `:has()` (llega en 105).
+  - El minificador de prod junta reglas iguales en una sola lista de selectores. Basta un `:has` en la lista para que Chrome 95 descarte la regla entera, aunque en el fuente estén separadas.
+  - Por eso no se ocultaba la sidebar ni se aplicaba la grilla de una columna, y la sidebar quedaba como franja blanca a la derecha.
+  - El minificador también borra el `vh` de respaldo cuando va justo antes de un `dvh`.
+- Fix:
+  - El layout ≤720 queda en reglas planas, sin `:has`.
+  - `:has(.qv-live-flota--abierto)` pasa a ser la clase `.qv-live-cuerpo--flota-abierta`.
+  - Bloque `@supports not selector(:has(a))` dentro del ≤720, con los respaldos para navegadores sin `:has`: tabbar, padding y alturas en `vh`.
+- Verificación:
+  - No hay Chromium 95 descargable (404); se usó una **simulación**. Toma el CSS de prod real y quita lo que Chrome 95 no entiende (`@layer`, `:has`, `color-mix`, `dvh`, `oklch`, `translate`/`scale`/`rotate`); el script es `sim95.cjs`, en el scratchpad de la sesión.
+  - En Hoy, En vivo, Salidas, Alertas, Más y Vehículos: overflow 0, sidebar `display:none`, tabbar visible.
+  - Corrido sobre el build y otra vez contra prod r41.
+- Fuera de alcance: la píldora del marcador (usa `:has`) y los colores con `color-mix`. Recomendación: actualizar Chrome en ese celular.
+
+**#334 — la sesión del panel ya no se cierra sola (`ee22714`, `ci` y `acceptance` en verde).**
+- Causas:
+  - Todos comparten la misma cuenta.
+  - Reusar un refresh token revocaba **todas** las sesiones del usuario.
+  - El cliente cerraba sesión ante cualquier falla del refresh, también de red o 5xx.
+  - Dos pestañas competían por el mismo token.
+- API (`auth.service.ts`):
+  - El reuso revoca solo esa sesión.
+  - Gracia de 120 s: si se reusa el token inmediatamente anterior, se devuelve el vigente sin rotar.
+  - Cada rotación renueva `expiresAt`, en una ventana deslizante.
+  - `getSession` se llama con `disableRefresh: true`, para no extender sesiones ociosas.
+  - `JWT_REFRESH_TTL` pasa de 7d a **30d** (`.env.example` y `deploy-gcp.sh`).
+- Web:
+  - Solo un 401 o un 4xx real cierra la sesión. Red, 408, 429 y 5xx reintentan a los 5, 15 y 30 s, y después cada 60 s.
+  - Timeout de 15 s.
+  - `navigator.locks` más una relectura de `localStorage` dentro del lock.
+  - Refresca al volver a estar visible, en `focus` y en `online`.
+- Decisión, mía: 30 días deslizantes **sin tope absoluto**. Un celular perdido sigue logueado hasta que se resetea la contraseña.
+  - No existe en la API una vía para desactivar usuarios. Si se crea, tiene que borrar las sesiones.
+  - Límite conocido: si se pierde la respuesta del refresh y el reintento llega a más de 120 s, esa sesión se cierra.
+- `/security-review`: sin hallazgos con confianza ≥ 8. **Codex: no verificado (sin cuota).**
+
+**Deploy r41 (6/11, ~08:45 hora Bolivia, API y web).**
+- API `quivo-api-00060-q7v` (`api:r41-20261106`), con `JWT_REFRESH_TTL=30d` verificado en el servicio. Web `quivo-web-00029-vhx` (`web:r41-20261106`). El worker no se tocó.
+- Rollback: web `quivo-web-00028-w5l`, API `quivo-api-00058-jlq`.
+- Smoke en prod: el login rota el refresh. Reusar el token anterior dentro de la gracia devuelve el mismo token vigente (201). Logout 204.
+- El CSS de prod contiene el bloque `@supports not selector(:has(a))`. La simulación de Chrome 95 contra prod dio OK en las 6 pantallas.
+- **No verificado en el celular real del delegado.**
+
+**#335 — rol `delegado` (`43bd96a`, `ci` y `acceptance` en verde).**
+- El rol `delegado` pertenece a un solo sindicato. Ve solo **Hoy, En vivo, Salidas y Alertas**; cualquier otra ruta lo devuelve a Hoy y "Más" no muestra lista.
+- Alta: `POST /v1/auth/admin/users`, solo `admin_quivo`.
+  - `rol` es `z.literal('delegado')`, así que por acá no se crean admins.
+  - Usuario, cuenta y auditoría van en una transacción. La contraseña no queda ni en logs ni en la auditoría.
+  - Devuelve 404 si el sindicato no existe y 409 si el email ya está.
+- Permisos en la API, decididos por mí:
+  - **Opera** en `reportes/en-vivo` (incluye designar vuelta), `jornadas`, `infracciones` (atender, descartar, sancionar) y `salidas/:pc` (fila, reglas del día, frecuencia base).
+  - **Solo `GET listar`** en líneas, rutas, variantes, puntos de control, vehículos, conductores, reglas y sanciones.
+  - Grupos de trufis siguen siendo solo de admins (decisión del 20/10).
+  - Todo pasa por RLS y tenant context.
+- Límite conocido: el delegado puede sancionar, pero no ve `/reglas`. Una sanción equivocada la corrige un admin.
+- Web:
+  - Hoy se monta para el delegado a cualquier ancho.
+  - Los enlaces se ocultan según el permiso de la ruta destino, lo que también corrige "Ver recorrido" y "Agregar" para el operador.
+  - Las etiquetas de rol salen de `ROLE_LABEL`. Ahora el sidebar dice "Administrador QUIVO" y "Administrador de sindicato".
+- Tests:
+  - Matriz de roles por handler.
+  - Integración con DB real: alta → login → JWT con `rol` y `sindicatoId`; reset con mayúsculas; un delegado de otro sindicato no ve la terminal.
+  - Acceptance del delegado en móvil.
+- Gates:
+  - `/code-review` high: 9 hallazgos, 5 aplicados.
+  - `/ponytail-review` y `/security-review`: sin bloqueantes.
+  - web-design-guidelines e impeccable no se corrieron (no hay dirección visual nueva).
+  - **Codex: no verificado (sin cuota).**
+
+**Deploy r42 (6/11, ~09:15 hora Bolivia, API y web).**
+- API `quivo-api-00062-r98` (`api:r42-20261106`), web `quivo-web-00030-p69` (`web:r42-20261106`). `/v1/health/ready` ok.
+- Rollback: API `quivo-api-00060-q7v` y web `quivo-web-00029-vhx` (r41).
+
+**Cuenta del delegado en prod: `delegado.linea16@tuquivo.com`, Sindicato Piloto.**
+- La contraseña está fuera del repo, en `~/.quivo-delegado-creds` (600), y se le entregó al CTO por chat.
+- QA en prod con esa cuenta:
+  - El JWT trae `rol: delegado` y el sindicato correcto.
+  - Ocho lecturas dan 200 (en vivo, infracciones de hoy, jornadas, líneas, vehículos, conductores, sanciones, reglas).
+  - Socios, rotaciones, sindicatos, auditoría, grupos, usuarios del admin y los POST dan **403**.
+  - Ve **lo mismo que el admin**: 12 sesiones en vivo, 1 infracción de hoy y la fila de la terminal L16.
+  - Chrome 95 simulado (Pixel 7) con su sesión:
+    - El mapa muestra "9 de 9" trufis.
+    - Salidas tiene frecuencia base y Despachar.
+    - Alertas muestra 1 leve y las sanciones como texto.
+    - Más lo muestra como "Delegado" y tiene "Cerrar sesión".
+    - `/vehiculos` lo devuelve a Hoy.
+    - Overflow 0 y sin sidebar en las 6 pantallas.
+  - No hubo escrituras: el script bloquea todo lo que no sea GET.
+- **Pendiente, del CTO:**
+  - Entregarle la credencial al delegado.
+  - En su celular, cerrar la sesión de `admin_quivo` que tenga abierta y entrar con la nueva.
+  - Confirmar en el Xiaomi real que la franja blanca ya no aparece.
+  - Si se puede, actualizar Chrome en ese celular.
+
 ## Cerrado — 2026-11-05: Quivo Control móvil, fase 2 (escala + rediseño foco)
 
 Plan: [`docs/plan-movil-rediseno.md`](plan-movil-rediseno.md). El CTO vio el responsive de A/B/C como una "mini versión" del panel.
