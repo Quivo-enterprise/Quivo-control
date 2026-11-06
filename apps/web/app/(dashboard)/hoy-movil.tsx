@@ -7,6 +7,7 @@ import { Alert, Loader, PageHeader, PlateBadge, StatusBadge } from '@quivo/desig
 import { formatearTelefonoBolivia } from '@quivo/shared';
 import { ChevronRight, Clock, MessageCircle, Phone, Search } from 'lucide-react';
 import { useAuth } from '../../src/lib/auth/auth-context';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../../src/lib/nav-items';
 import { conductoresApi } from '../../src/lib/api/conductores';
 import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
@@ -99,7 +100,7 @@ function HaceFix({ antiguedadFixMs, actualizadoEn }: { antiguedadFixMs: number |
 }
 
 export function HoyMovil() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [consulta, setConsulta] = useState('');
   const [reintentando, setReintentando] = useState(false);
   const n = normalizarBusqueda(consulta).length;
@@ -160,7 +161,8 @@ export function HoyMovil() {
       nombre: 'Sanciones pendientes',
       clase: 'sanciones',
       valor: valorDe(sanciones, (d) => (d.length >= LIMITE_SANCIONES_API ? `${LIMITE_SANCIONES_API}+` : d.length)),
-      href: '/reglas',
+      // `/reglas` no es del delegado: para él es solo el conteo.
+      href: isRouteAllowedForRole(NAV_ITEMS, '/reglas', user?.rol ?? '') ? '/reglas' : undefined,
     },
   ];
 

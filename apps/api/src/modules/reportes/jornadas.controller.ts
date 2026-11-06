@@ -17,7 +17,7 @@ class JornadasQueryDto extends createZodDto(JornadasQuerySchema) {}
  */
 @Controller('reportes/jornadas')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato')
+@Roles('admin_quivo', 'admin_sindicato', 'delegado')
 @Throttle({ default: { limit: 300, ttl: 60_000 } })
 export class JornadasController {
   constructor(@Inject(JornadasService) private readonly jornadasService: JornadasService) {}

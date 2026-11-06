@@ -97,6 +97,7 @@ export const ROLE_LABEL: Record<string, string> = {
   admin_quivo: 'Administrador QUIVO',
   admin_sindicato: 'Administrador de sindicato',
   operador: 'Operador',
+  delegado: 'Delegado',
   supervisor: 'Supervisor',
   socio: 'Socio',
   conductor: 'Conductor',

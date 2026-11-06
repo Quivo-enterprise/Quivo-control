@@ -1,9 +1,10 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { APIError } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
 import { auth, prisma, resolveJwtSecret, SESSION_TTL_SECONDS, withTenantContext } from '@quivo/db';
 import type {
+  AdminCrearUsuarioRequest,
   AdminResetPasswordRequest,
   LoginRequest,
   LoginResponse,
@@ -292,6 +293,66 @@ export class AuthService {
         },
       }),
     );
+  }
+
+  /** POST /v1/auth/admin/users — alta asistida de un `delegado` por `admin_quivo` (el controller
+   * lo restringe). No hay registro público (sin ruta de sign-up) ni otra vía de alta en la API:
+   * antes solo existía el seed. Hashea con `better-auth/crypto`, igual que el reset.
+   *
+   * Sin `@Auditable`, por el mismo motivo que el reset: ese interceptor guardaría el body
+   * (con la contraseña en claro) en `audit_log.diff`. Se audita a mano, sin la contraseña. */
+  async crearUsuarioComoAdmin(
+    actor: AuthenticatedUser,
+    { email, name, password, rol, sindicatoId }: AdminCrearUsuarioRequest,
+  ): Promise<UsuarioAdministrativo> {
+    const emailNormalizado = email.toLowerCase();
+    const tenant = { rol: actor.rol, sindicatoId: actor.sindicatoId };
+    // `sindicatos` tiene RLS: se lee con el contexto del actor (admin_quivo ve todos).
+    const sindicato = await withTenantContext(tenant, (tx) =>
+      tx.sindicato.findUnique({ where: { id: sindicatoId }, select: { id: true } }),
+    );
+    if (!sindicato) {
+      throw new NotFoundException('Sindicato no encontrado');
+    }
+    if (await prisma.user.findUnique({ where: { email: emailNormalizado } })) {
+      throw new ConflictException('Ya existe un usuario con ese email');
+    }
+
+    const hashed = await hashPassword(password);
+    const id = randomUUID();
+    let usuario: UsuarioAdministrativo;
+    try {
+      usuario = (await prisma.$transaction(async (tx) => {
+        const creado = await tx.user.create({
+          data: { id, name, email: emailNormalizado, rol, sindicatoId },
+          select: { id: true, name: true, email: true, rol: true, sindicatoId: true },
+        });
+        await tx.account.create({
+          data: { id: randomUUID(), accountId: id, providerId: 'credential', userId: id, password: hashed },
+        });
+        return creado;
+      })) as UsuarioAdministrativo;
+    } catch (error) {
+      // Carrera con otro alta del mismo email: el unique de `user.email` manda.
+      if ((error as { code?: string }).code === 'P2002') {
+        throw new ConflictException('Ya existe un usuario con ese email');
+      }
+      throw error;
+    }
+
+    await withTenantContext(tenant, (tx) =>
+      tx.auditLog.create({
+        data: {
+          sindicatoId,
+          usuarioId: actor.userId,
+          entidad: 'usuario',
+          entidadId: usuario.id,
+          accion: 'crear',
+          diff: { email: usuario.email, rol, sindicatoId },
+        },
+      }),
+    );
+    return usuario;
   }
 
   /** El token corto (`jwt` plugin) requiere una sesión válida — se la pasamos vía Bearer (plugin `bearer`, no hay cookies server-to-server). */

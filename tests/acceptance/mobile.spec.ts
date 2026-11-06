@@ -1857,6 +1857,20 @@ test.describe('Más por rol (sesión simulada)', () => {
     await context.close();
   });
 
+  test('delegado: cinco pestañas, Más sin lista con Cerrar sesión, y /vehiculos lo devuelve a Hoy', async ({ browser }, testInfo) => {
+    const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'delegado');
+    await p.goto('/mas', { waitUntil: 'domcontentloaded' });
+    await expect(p.getByRole('heading', { name: 'Más', level: 1 })).toBeVisible();
+    await expect(p.locator('.qv-mas-list')).toHaveCount(0);
+    await expect(p.locator('.qv-mas-user__meta')).toHaveText('Delegado');
+    await expect(p.getByRole('button', { name: 'Cerrar sesión' })).toBeVisible();
+    const tabbar = p.getByRole('navigation', { name: 'Pestañas', exact: true });
+    await expect(tabbar.getByRole('link')).toHaveText([/^Hoy$/, /^En vivo$/, /^Salidas$/, /^Alertas/, /^Más$/]);
+    await p.goto('/vehiculos', { waitUntil: 'domcontentloaded' });
+    await expect(p).toHaveURL(/\/$/, { timeout: 30_000 });
+    await context.close();
+  });
+
   test('escritorio: /mas redirige a / y la sidebar sigue', async ({ browser }, testInfo) => {
     const { context, page: p } = await paginaConSesion(browser, testInfo.project.use.baseURL, 'admin_quivo', { width: 1440, height: 900 });
     await p.goto('/mas', { waitUntil: 'domcontentloaded' });

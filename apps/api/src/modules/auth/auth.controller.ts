@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
+  AdminCrearUsuarioRequestSchema,
   AdminResetPasswordRequestSchema,
   LoginRequestSchema,
   LogoutRequestSchema,
@@ -16,6 +17,7 @@ import { AuthService } from './auth.service.js';
 class LoginDto extends createZodDto(LoginRequestSchema) {}
 class RefreshDto extends createZodDto(RefreshRequestSchema) {}
 class LogoutDto extends createZodDto(LogoutRequestSchema) {}
+class AdminCrearUsuarioDto extends createZodDto(AdminCrearUsuarioRequestSchema) {}
 class AdminResetPasswordDto extends createZodDto(AdminResetPasswordRequestSchema) {}
 
 @Controller('auth')
@@ -52,6 +54,15 @@ export class AuthController {
   @Roles('admin_quivo')
   listarUsuarios() {
     return this.authService.listarUsuarios();
+  }
+
+  /** POST /v1/auth/admin/users — alta asistida de un `delegado` (ver AuthService.crearUsuarioComoAdmin).
+   * Solo `admin_quivo`; sin `@Auditable` a propósito (el body trae la contraseña). */
+  @Post('admin/users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin_quivo')
+  crearUsuario(@CurrentUser() actor: AuthenticatedUser, @Body() body: AdminCrearUsuarioDto) {
+    return this.authService.crearUsuarioComoAdmin(actor, body);
   }
 
   /** POST /v1/auth/admin/reset-password — reset asistido, sin flujo de email (ver

@@ -11,7 +11,7 @@ import { FrecuenciasPanel } from './frecuencias-panel';
 import { GruposPanel } from './grupos-panel';
 import { contarFila, mensajeError, useFilaSalida, useGruposVehiculo, useTerminales, useVehiculosSalida } from './use-salidas';
 
-const ROLES_GRUPOS = ['admin_quivo', 'admin_sindicato'];
+const ROLES_GRUPOS = ['admin_quivo', 'admin_sindicato', 'delegado'];
 
 export default function SalidasPage() {
   return (

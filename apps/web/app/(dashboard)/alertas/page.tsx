@@ -7,6 +7,7 @@ import { Alert, Loader, PageHeader, PlateBadge } from '@quivo/design-system';
 import { Ban, ChevronRight, MapPin } from 'lucide-react';
 import { LIMITE_INFRACCIONES_HOY, detalleInfraccion, etiquetaTipoInfraccion, type GravedadRegla, type Infraccion, type InfraccionHoy, type Regla } from '@quivo/shared';
 import { useAuth } from '../../../src/lib/auth/auth-context';
+import { isRouteAllowedForRole, NAV_ITEMS } from '../../../src/lib/nav-items';
 import { infraccionesApi } from '../../../src/lib/api/infracciones';
 import { reglasApi } from '../../../src/lib/api/reglas';
 import {
@@ -60,7 +61,7 @@ function HaceAlerta({ inicioTs }: { inicioTs: Date }) {
 }
 
 export default function AlertasPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const alertas = useInfraccionesHoy(token);
   const esMovil = useEsMovil();
@@ -272,6 +273,14 @@ export default function AlertasPage() {
     );
   };
 
+  const textoSanciones = (
+    <span>
+      <Ban size={20} aria-hidden="true" />
+      Sanciones pendientes
+      {esMovil && sanciones.data ? ` (${sanciones.data.length >= LIMITE_SANCIONES_API ? `${LIMITE_SANCIONES_API}+` : sanciones.data.length})` : ''}
+    </span>
+  );
+
   return (
     <div className={esMovil ? 'qv-alertas qv-alertas-m' : 'qv-alertas'}>
       <p className="qv-visually-hidden" aria-live="polite">
@@ -317,14 +326,15 @@ export default function AlertasPage() {
         ))}
       </div>
 
-      <Link href="/reglas" className="qv-alertas__link">
-        <span>
-          <Ban size={20} aria-hidden="true" />
-          Sanciones pendientes
-          {esMovil && sanciones.data ? ` (${sanciones.data.length >= LIMITE_SANCIONES_API ? `${LIMITE_SANCIONES_API}+` : sanciones.data.length})` : ''}
-        </span>
-        <ChevronRight size={20} aria-hidden="true" />
-      </Link>
+      {/* `/reglas` no es de todos los roles: sin acceso, el conteo queda como texto. */}
+      {isRouteAllowedForRole(NAV_ITEMS, '/reglas', user?.rol ?? '') ? (
+        <Link href="/reglas" className="qv-alertas__link">
+          {textoSanciones}
+          <ChevronRight size={20} aria-hidden="true" />
+        </Link>
+      ) : (
+        <div className="qv-alertas__link">{textoSanciones}</div>
+      )}
 
       {alertas.isError && alertas.data && (
         <Alert variant="warning" title={`No se pudo actualizar; mostrando datos de ${horaBo(alertas.dataUpdatedAt)}`} />

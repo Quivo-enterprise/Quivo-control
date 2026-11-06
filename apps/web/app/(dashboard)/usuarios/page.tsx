@@ -33,6 +33,7 @@ const OPCIONES_ROL = [
   { label: 'Todos los roles', value: '' },
   { label: 'Administrador QUIVO', value: 'admin_quivo' },
   { label: 'Administrador de sindicato', value: 'admin_sindicato' },
+  { label: 'Delegado', value: 'delegado' },
   { label: 'Conductor', value: 'conductor' },
 ];
 
@@ -474,7 +475,9 @@ export default function UsuariosPage() {
                               ? 'Admin QUIVO'
                               : u.rol === 'admin_sindicato'
                                 ? 'Admin Sindicato'
-                                : 'Conductor'}
+                                : u.rol === 'delegado'
+                                  ? 'Delegado'
+                                  : 'Conductor'}
                           </span>
                         </td>
                         <td data-label="Ámbito">

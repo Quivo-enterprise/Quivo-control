@@ -13,12 +13,15 @@ export interface NavItem {
   iconName?: string;
 }
 
+/** `delegado`: delegado del sindicato desde el celular; solo Hoy, En vivo, Salidas y Alertas (cualquier otra ruta lo manda a Hoy). */
+export const esDelegado = (rol: string | null | undefined): boolean => rol === 'delegado';
+
 export const NAV_ITEMS: NavItem[] = [
   {
     id: 'dashboard',
     label: 'Dashboard',
     href: '/',
-    roles: ['admin_quivo', 'admin_sindicato'],
+    roles: ['admin_quivo', 'admin_sindicato', 'delegado'],
     section: 'Operación',
     iconName: 'LayoutDashboard',
   },
@@ -27,7 +30,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'En vivo',
     href: '/en-vivo',
     // `operador` (el control): mapa en vivo + designar a Molinos; infracciones en solo lectura.
-    roles: ['admin_quivo', 'admin_sindicato', 'operador'],
+    roles: ['admin_quivo', 'admin_sindicato', 'operador', 'delegado'],
     section: 'Operación',
     iconName: 'Radio',
   },
@@ -36,7 +39,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Salidas',
     href: '/salidas',
     // Mismos roles que "En vivo": el control maneja la fila; los grupos de trufis son solo admin (lo oculta la página).
-    roles: ['admin_quivo', 'admin_sindicato', 'operador'],
+    roles: ['admin_quivo', 'admin_sindicato', 'operador', 'delegado'],
     section: 'Operación',
     iconName: 'ListOrdered',
   },
@@ -45,7 +48,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Alertas',
     href: '/alertas',
     // Atender/descartar/sancionar es solo de los admins (`InfraccionesController`): el operador no entra.
-    roles: ['admin_quivo', 'admin_sindicato'],
+    roles: ['admin_quivo', 'admin_sindicato', 'delegado'],
     section: 'Operación',
     iconName: 'Bell',
   },

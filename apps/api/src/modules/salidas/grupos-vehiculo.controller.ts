@@ -22,7 +22,7 @@ class AgregarMiembroGrupoDto extends createZodDto(AgregarMiembroGrupoSchema) {}
 /** Grupos de trufis: SOLO admins (decisión del CTO, 20/10); `operador` recibe 403. */
 @Controller('grupos-vehiculo')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin_quivo', 'admin_sindicato')
+@Roles('admin_quivo', 'admin_sindicato', 'delegado')
 export class GruposVehiculoController {
   constructor(@Inject(GruposService) private readonly gruposService: GruposService) {}
 

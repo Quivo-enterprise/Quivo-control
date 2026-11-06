@@ -5,6 +5,7 @@ import {
   EventoSyncSchema,
   LoginRequestSchema,
   LoginResponseSchema,
+  AdminCrearUsuarioRequestSchema,
 } from './index.js';
 
 describe('@quivo/shared contract', () => {
@@ -80,5 +81,14 @@ describe('@quivo/shared contract', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('alta de usuario del panel: solo delegado, con sindicato uuid', () => {
+    const base = { email: 'delegado@ejemplo.test', name: 'Delegado de Prueba', password: 'clave-de-prueba-123', rol: 'delegado', sindicatoId: '11111111-1111-4111-8111-111111111111' };
+    expect(RolSchema.safeParse('delegado').success).toBe(true);
+    expect(AdminCrearUsuarioRequestSchema.safeParse(base).success).toBe(true);
+    expect(AdminCrearUsuarioRequestSchema.safeParse({ ...base, rol: 'admin_quivo' }).success).toBe(false);
+    expect(AdminCrearUsuarioRequestSchema.safeParse({ ...base, sindicatoId: null }).success).toBe(false);
+    expect(AdminCrearUsuarioRequestSchema.safeParse({ ...base, password: 'corta' }).success).toBe(false);
   });
 });

@@ -27,7 +27,9 @@ const ROLES_REGLAS = ['admin_quivo', 'admin_sindicato'] as const;
 export class ReglasController {
   constructor(@Inject(ReglasService) private readonly reglasService: ReglasService) {}
 
+  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
   @Get()
+  @Roles('admin_quivo', 'admin_sindicato', 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.reglasService.listar(actor);
   }

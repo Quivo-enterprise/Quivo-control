@@ -29,7 +29,7 @@ export function nivelDeAlerta(p: Pick<PosicionEnVivo, 'infraccionNivel' | 'infra
 
 /** Roles que pueden atender, descartar y sancionar infracciones (la API da 403 al resto: el
  * `operador` las ve en solo lectura). Allowlist: un rol nuevo no hereda el permiso por omisión. */
-const ROLES_ACTUAN_INFRACCIONES: readonly string[] = ['admin_quivo', 'admin_sindicato'];
+const ROLES_ACTUAN_INFRACCIONES: readonly string[] = ['admin_quivo', 'admin_sindicato', 'delegado'];
 export function puedeActuarEnInfracciones(rol: string | null | undefined): boolean {
   return rol !== null && rol !== undefined && ROLES_ACTUAN_INFRACCIONES.includes(rol);
 }

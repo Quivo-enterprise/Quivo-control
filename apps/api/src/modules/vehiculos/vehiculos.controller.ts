@@ -42,7 +42,9 @@ export class VehiculosController {
     @Inject(VehiculoFotoService) private readonly fotoService: VehiculoFotoService,
   ) {}
 
+  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
   @Get()
+  @Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.vehiculosService.listar(actor);
   }

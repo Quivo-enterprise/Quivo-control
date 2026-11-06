@@ -233,9 +233,10 @@ describe('alertaMarcador (pendiente E #1)', () => {
 });
 
 describe('puedeActuarEnInfracciones', () => {
-  it('admins sí; operador y roles desconocidos no', () => {
+  it('admins y delegado sí; operador y roles desconocidos no', () => {
     expect(puedeActuarEnInfracciones('admin_quivo')).toBe(true);
     expect(puedeActuarEnInfracciones('admin_sindicato')).toBe(true);
+    expect(puedeActuarEnInfracciones('delegado')).toBe(true);
     expect(puedeActuarEnInfracciones('operador')).toBe(false);
     expect(puedeActuarEnInfracciones('conductor')).toBe(false);
     expect(puedeActuarEnInfracciones(undefined)).toBe(false);

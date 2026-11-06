@@ -23,7 +23,9 @@ class ActualizarLineaDto extends createZodDto(ActualizarLineaSchema) {}
 export class LineasController {
   constructor(@Inject(LineasService) private readonly lineasService: LineasService) {}
 
+  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
   @Get()
+  @Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.lineasService.listar(actor);
   }

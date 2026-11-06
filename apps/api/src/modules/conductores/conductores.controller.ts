@@ -23,7 +23,9 @@ class ActualizarConductorDto extends createZodDto(ActualizarConductorSchema) {}
 export class ConductoresController {
   constructor(@Inject(ConductoresService) private readonly conductoresService: ConductoresService) {}
 
+  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
   @Get()
+  @Roles('admin_quivo', 'admin_sindicato', 'operador', 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser) {
     return this.conductoresService.listar(actor);
   }

@@ -29,7 +29,9 @@ const ROLES_SANCIONES = ['admin_quivo', 'admin_sindicato'] as const;
 export class SancionesController {
   constructor(@Inject(SancionesService) private readonly sancionesService: SancionesService) {}
 
+  // `delegado`: solo lectura de este listado (lo usan Hoy, En vivo, Alertas y Salidas); el resto del controller no lo admite.
   @Get()
+  @Roles('admin_quivo', 'admin_sindicato', 'delegado')
   listar(@CurrentUser() actor: AuthenticatedUser, @Query() query: SancionesQueryDto) {
     return this.sancionesService.listar(actor, query as SancionesQuery);
   }
