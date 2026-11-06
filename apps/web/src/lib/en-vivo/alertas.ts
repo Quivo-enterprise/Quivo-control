@@ -274,14 +274,9 @@ export function resumenAlertasDia(
   return { texto: textoAlertasAbiertas(abiertasHoy), boton: puedeVerAlertas ? 'enlace' : 'oculto' };
 }
 
-/** Conteo de alertas abiertas por gravedad (chips del celular); el nivel sin alertas cuenta 0. */
-export function cuentaAbiertasPorGravedad(infracciones: readonly Pick<Infraccion, 'estado' | 'gravedad'>[]): Record<GravedadRegla, number> {
+/** Conteo de alertas por gravedad (chips del celular) sobre la lista que se le pase; el nivel sin alertas cuenta 0. */
+export function cuentaPorGravedad(infracciones: readonly Pick<Infraccion, 'gravedad'>[]): Record<GravedadRegla, number> {
   const cuenta: Record<GravedadRegla, number> = { gravisima: 0, grave: 0, leve: 0 };
-  for (const i of infracciones) if (i.estado === 'abierta') cuenta[i.gravedad] += 1;
+  for (const i of infracciones) cuenta[i.gravedad] += 1;
   return cuenta;
-}
-
-/** Lista plana del celular: gravísima, grave, leve; dentro de cada nivel, la más reciente primero. */
-export function ordenarPorGravedad<T extends Pick<Infraccion, 'gravedad' | 'inicioTs'>>(infracciones: readonly T[]): T[] {
-  return [...infracciones].sort((a, b) => NIVELES_DESC.indexOf(a.gravedad) - NIVELES_DESC.indexOf(b.gravedad) || b.inicioTs.getTime() - a.inicioTs.getTime());
 }

@@ -23,8 +23,7 @@ import {
   urlWhatsapp,
   velocidadKmh,
   aplicarResueltas,
-  cuentaAbiertasPorGravedad,
-  ordenarPorGravedad,
+  cuentaPorGravedad,
 } from './alertas';
 import { etiquetaAlerta } from '../../../../../packages/design-system/src/ui/route-map-vehiculo';
 
@@ -299,21 +298,10 @@ describe('resumenAlertasDia', () => {
   });
 });
 
-describe('alertas del celular: conteo y orden por gravedad', () => {
-  const inf = (gravedad: 'gravisima' | 'grave' | 'leve', estado: 'abierta' | 'atendida', min: number) => ({
-    gravedad,
-    estado,
-    inicioTs: new Date(Date.UTC(2026, 9, 5, 12, min)),
-  });
-  it('cuenta solo abiertas y deja en 0 el nivel sin alertas', () => {
-    const lista = [inf('leve', 'abierta', 1), inf('leve', 'abierta', 2), inf('grave', 'atendida', 3), inf('gravisima', 'abierta', 4)];
-    expect(cuentaAbiertasPorGravedad(lista)).toEqual({ gravisima: 1, grave: 0, leve: 2 });
-    expect(cuentaAbiertasPorGravedad([])).toEqual({ gravisima: 0, grave: 0, leve: 0 });
-  });
-  it('ordena gravísima, grave, leve y la más reciente primero dentro del nivel, sin mutar', () => {
-    const lista = [inf('leve', 'abierta', 5), inf('grave', 'abierta', 1), inf('leve', 'abierta', 9), inf('gravisima', 'abierta', 2), inf('grave', 'atendida', 8)];
-    const orden = ordenarPorGravedad(lista);
-    expect(orden.map((i) => `${i.gravedad}${i.inicioTs.getUTCMinutes()}`)).toEqual(['gravisima2', 'grave8', 'grave1', 'leve9', 'leve5']);
-    expect(lista[0]!.gravedad).toBe('leve');
+describe('alertas del celular: conteo por gravedad', () => {
+  it('cuenta lo que se le pase y deja en 0 el nivel sin alertas', () => {
+    const lista = [{ gravedad: 'leve' as const }, { gravedad: 'leve' as const }, { gravedad: 'gravisima' as const }];
+    expect(cuentaPorGravedad(lista)).toEqual({ gravisima: 1, grave: 0, leve: 2 });
+    expect(cuentaPorGravedad([])).toEqual({ gravisima: 0, grave: 0, leve: 0 });
   });
 });

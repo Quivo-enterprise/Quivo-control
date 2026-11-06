@@ -393,12 +393,12 @@ test.describe('Panel móvil (Pixel 7)', () => {
         lat: -17.38, lng: -66.3, detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 }, sancionId: null, atendidaPor: null, atendidaEn: null,
         nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: placa, conductorNombre: 'Bravo Soliz Javier', lineaNombre: 'Línea 16',
       });
-    // Desordenadas a propósito: la lista debe salir gravísima, grave, leve (y la más reciente primero).
+    // Como la API: abiertas primero y la más reciente arriba; la página agrupa por nivel (gravísima, grave, leve).
     const filas = [
-      infra(1, '5163NCF', 'leve', 'abierta', 52),
-      infra(2, '1616PIL', 'grave', 'abierta', 30),
-      infra(3, '4701EHA', 'gravisima', 'abierta', 11),
       infra(4, '2222AAA', 'leve', 'abierta', 5),
+      infra(3, '4701EHA', 'gravisima', 'abierta', 11),
+      infra(2, '1616PIL', 'grave', 'abierta', 30),
+      infra(1, '5163NCF', 'leve', 'abierta', 52),
       infra(5, '3333BBB', 'grave', 'atendida', 3),
     ];
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: filas }));
@@ -408,7 +408,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       const cards = page.locator('.qv-alertas__card');
       await expect(cards).toHaveCount(4);
       const chips = page.getByRole('group', { name: 'Filtrar por gravedad' }).getByRole('button');
-      await expect(chips).toHaveText(['1gravísima', '1grave', '2leve']); // solo abiertas: la grave atendida no cuenta
+      await expect(chips).toHaveText(['1gravísima', '1grave', '2leve']); // filtro Abiertas: la grave atendida no cuenta
+      await expect(chips.nth(0)).toHaveAccessibleName('Gravísima: 1 abierta');
+      await expect(chips.nth(2)).toHaveAccessibleName('Leve: 2 abiertas');
       await expect(page.getByRole('link', { name: /Sanciones pendientes \(3\)/ })).toHaveAttribute('href', '/reglas');
       // Orden: gravísima, grave, leve (más reciente primero dentro del nivel).
       await expect(cards.locator('.qv-alertas-m__sev')).toHaveText(['gravísima', 'grave', 'leve', 'leve']);
@@ -416,6 +418,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(cards.first().locator('.qv-alertas-m__hora')).toContainText('hace 11 min');
       await expect(page.locator('.qv-alertas__titulo')).toHaveCount(4);
       await expect(page.getByRole('heading', { level: 2 })).toHaveCount(0); // lista plana, sin encabezados por gravedad
+      // Una sola línea en el día: la tarjeta no la repite; con Abiertas no hay palabra de estado.
+      await expect(cards.first().locator('.qv-live-inf__detalle')).not.toContainText('Línea 16');
+      await expect(cards.first().locator('.qv-alertas-m__hora')).not.toContainText('Abierta');
 
       // Acciones en una sola fila, dentro de la tarjeta y sin texto cortado.
       for (const card of await cards.all()) {
@@ -443,8 +448,18 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(cards).toHaveCount(1);
       await chips.nth(1).click();
       await expect(cards).toHaveCount(4);
-      // Con el estado Atendidas, el chip filtra dentro de las atendidas; los conteos de los chips siguen siendo de abiertas.
+      // Con Todas: cada tarjeta dice su estado y los chips cuentan lo que mostrará tocarlos (la grave atendida suma).
+      await page.getByRole('button', { name: /Todas/ }).click();
+      await expect(cards).toHaveCount(5);
+      await expect(cards.locator('.qv-alertas-m__hora')).toHaveText([/^Abierta · /, /^Abierta · /, /^Atendida · /, /^Abierta · /, /^Abierta · /]);
+      await expect(chips.nth(1)).toHaveAccessibleName('Grave: 2 en total');
+      await chips.nth(1).click();
+      await expect(cards).toHaveCount(2);
+      await chips.nth(1).click();
+      // Con el estado Atendidas, el chip cuenta y filtra dentro de las atendidas.
       await page.getByRole('button', { name: /Atendidas/ }).click();
+      await expect(chips.nth(1)).toHaveAccessibleName('Grave: 1 atendida');
+      await expect(chips.nth(0)).toHaveAccessibleName('Gravísima: 0 atendidas');
       await chips.nth(0).click();
       await expect(page.getByText('Sin alertas atendidas de gravedad gravísima')).toBeVisible();
       await chips.nth(0).click();
@@ -457,6 +472,40 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await ver.click();
       await expect(page).toHaveURL(new RegExp(`/en-vivo\\?vehiculo=${id(203)}&sesion=${id(603)}`), { timeout: 30_000 });
     } finally {
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.unroute('**/v1/sanciones*');
+    }
+  });
+
+  test('Alertas: con dos líneas la tarjeta muestra la línea; en escritorio no se pide /sanciones', async () => {
+    test.setTimeout(90_000);
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const infra = (n: number, linea: string) =>
+      InfraccionHoySchema.parse({
+        id: id(n), sindicatoId: id(100), vehiculoId: id(200 + n), conductorId: id(300), lineaId: id(400 + n), rutaId: id(500), sesionId: id(600 + n),
+        reglaId: null, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date(Date.now() - 5 * 60_000).toISOString(), finTs: null,
+        lat: -17.38, lng: -66.3, detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 }, sancionId: null, atendidaPor: null, atendidaEn: null,
+        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: `100${n}AAA`, conductorNombre: 'Bravo Soliz Javier', lineaNombre: linea,
+      });
+    await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [infra(1, 'Línea 16'), infra(2, 'Línea 120')] }));
+    await page.route('**/v1/sanciones*', (r) => r.fulfill({ json: [] }));
+    const pedidos: string[] = [];
+    const alPedir = (req: { url(): string }) => req.url().includes('/v1/sanciones') && pedidos.push(req.url());
+    const original = page.viewportSize()!;
+    try {
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      const detalles = page.locator('.qv-alertas__card .qv-live-inf__detalle');
+      await expect(detalles).toHaveCount(2);
+      await expect(detalles.nth(0)).toContainText('Línea 16');
+      await expect(detalles.nth(1)).toContainText('Línea 120');
+      page.on('request', alPedir);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
+      await expect(page.locator('.qv-alertas__card')).toHaveCount(2);
+      expect(pedidos).toEqual([]);
+    } finally {
+      page.off('request', alPedir);
+      await page.setViewportSize(original);
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');
       await page.unroute('**/v1/sanciones*');
     }

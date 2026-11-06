@@ -14,8 +14,7 @@ import {
   ETIQUETA_NIVEL,
   NIVELES_DESC,
   aplicarResueltas,
-  cuentaAbiertasPorGravedad,
-  ordenarPorGravedad,
+  cuentaPorGravedad,
   type ResueltasInfraccion,
   duracionInfraccion,
   etiquetaInicioAlerta,
@@ -24,9 +23,10 @@ import {
   puedeSancionar,
   textoAlertasAbiertas,
 } from '../../../src/lib/en-vivo/alertas';
+import { useReloj } from '../../../src/lib/en-vivo/use-reloj';
 import { useInfraccionesHoy } from '../../../src/lib/en-vivo/use-en-vivo';
 import { haceCorto } from '../../../src/lib/hoy/hoy.logic';
-import { LIMITE_SANCIONES_API, useSancionesPendientes } from '../../../src/lib/hoy/use-sanciones-pendientes';
+import { LIMITE_SANCIONES_API, SANCIONES_PENDIENTES_KEY, useSancionesPendientes } from '../../../src/lib/hoy/use-sanciones-pendientes';
 import { useEsMovil } from '../../../src/lib/use-es-movil';
 import { mensajeError } from '../en-vivo/map-builders';
 import { FormularioDescarte, IconoNivel, mensajeAccion } from '../en-vivo/panel-vehiculo';
@@ -47,15 +47,31 @@ const VACIO: Record<Filtro, string> = {
 
 type Accion = 'atender' | 'descartar' | 'sancionar';
 
+const ETIQUETA_CONTEO: Record<Filtro, (n: number) => string> = {
+  abierta: (n) => `${n} abierta${n === 1 ? '' : 's'}`,
+  atendida: (n) => `${n} atendida${n === 1 ? '' : 's'}`,
+  todas: (n) => `${n} en total`,
+};
+
+/** Hoja: el tick de 1 s re-renderiza solo este texto (el poll sin cambios no repinta la lista). */
+function HaceAlerta({ inicioTs }: { inicioTs: Date }) {
+  const ahora = useReloj(1000);
+  return <>{haceCorto(ahora - inicioTs.getTime())}</>;
+}
+
 export default function AlertasPage() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const alertas = useInfraccionesHoy(token);
   const esMovil = useEsMovil();
-  const sanciones = useSancionesPendientes(token);
+  const sanciones = useSancionesPendientes(token, esMovil);
   const [filtro, setFiltro] = useState<Filtro>('abierta');
   // Solo celular: chips de gravedad (volver a tocar el activo lo quita).
   const [gravedad, setGravedad] = useState<GravedadRegla | null>(null);
+  // Al pasar a escritorio el filtro se quita: no debe reaplicarse en silencio al volver al celular.
+  useEffect(() => {
+    if (!esMovil) setGravedad(null);
+  }, [esMovil]);
   const [enCurso, setEnCurso] = useState<ReadonlyMap<string, Accion>>(new Map());
   const [resueltas, setResueltas] = useState<ResueltasInfraccion>(new Map());
   const [errores, setErrores] = useState<Readonly<Record<string, { placa: string; texto: string }>>>({});
@@ -73,8 +89,11 @@ export default function AlertasPage() {
   const porEstado = filtro === 'todas' ? todas : todas.filter((i) => i.estado === filtro);
   const visibles = esMovil && gravedad ? porEstado.filter((i) => i.gravedad === gravedad) : porEstado;
   const grupos = NIVELES_DESC.map((nivel) => ({ nivel, items: visibles.filter((i) => i.gravedad === nivel) })).filter((g) => g.items.length > 0);
-  const orden = esMovil ? ordenarPorGravedad(visibles) : grupos.flatMap((g) => g.items);
-  const cuentaGravedad = cuentaAbiertasPorGravedad(todas);
+  // La API ya entrega abiertas primero y la más reciente arriba: agrupar por nivel basta (mismo orden en celular y escritorio).
+  const orden = grupos.flatMap((g) => g.items);
+  const cuentaGravedad = cuentaPorGravedad(porEstado);
+  // Solo celular: la tarjeta no repite la línea si todo el día es de una sola.
+  const variasLineas = new Set(todas.map((i) => i.lineaId)).size > 1;
 
   // Foco: tras una acción lograda (ya aplicada en la lista local), si el foco cayó a <body> pasa a la primera acción
   // de la misma tarjeta (sigue listada, p. ej. filtro Todas) o de la que ocupa su lugar; sin tarjetas, al mensaje vacío.
@@ -171,8 +190,8 @@ export default function AlertasPage() {
               {ETIQUETA_NIVEL[inf.gravedad].singular}
             </span>
             <span className="qv-alertas-m__hora">
-              {inf.estado === 'abierta' ? '' : `${ETIQUETA_ESTADO_INFRACCION[inf.estado]} · `}
-              {etiquetaInicioAlerta(inf.inicioTs)} · {haceCorto(Date.now() - inf.inicioTs.getTime())}
+              {filtro === 'todas' || inf.estado !== 'abierta' ? `${ETIQUETA_ESTADO_INFRACCION[inf.estado]} · ` : ''}
+              {etiquetaInicioAlerta(inf.inicioTs)} · <HaceAlerta inicioTs={inf.inicioTs} />
             </span>
           </div>
         ) : (
@@ -193,7 +212,7 @@ export default function AlertasPage() {
           {duracion ? ` · duró ${duracion}` : ''}
           {' · '}
           {inf.conductorNombre}
-          {esMovil ? '' : ` · ${inf.lineaNombre}`}
+          {esMovil && !variasLineas ? '' : ` · ${inf.lineaNombre}`}
         </p>
         {descarte?.id === inf.id ? (
           <FormularioDescarte
@@ -268,6 +287,7 @@ export default function AlertasPage() {
               type="button"
               className={`qv-alertas-m__gchip qv-alertas-m__gchip--${n}`}
               aria-pressed={gravedad === n}
+              aria-label={`${ETIQUETA_NIVEL[n].singular.replace(/^./, (c) => c.toUpperCase())}: ${ETIQUETA_CONTEO[filtro](cuentaGravedad[n])}`}
               onClick={() => {
                 setGravedad(gravedad === n ? null : n);
                 setErrores({});
@@ -365,6 +385,7 @@ export default function AlertasPage() {
             const { inf } = sancion;
             setSancion(null);
             resolver(inf, 'sancionada');
+            void queryClient.invalidateQueries({ queryKey: SANCIONES_PENDIENTES_KEY });
           }}
         />
       )}
