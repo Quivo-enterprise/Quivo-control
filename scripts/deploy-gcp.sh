@@ -781,7 +781,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   # régimen estable 3x6 + 5 (worker) + 1 (retención) = 24. En un rolling deploy pueden solaparse
   # revisiones viejas y nuevas (hasta 6x6 + 2x5 + 1 = 47) y Cloud SQL reserva 3 slots de superuser:
   # justo solo durante un deploy a escala plena, por eso los deploys se congelan el día de la prueba.
-  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=7d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}%%DB_POOL_MAX=6%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000"
+  API_SET_ENV_VARS="NODE_ENV=production%%MOBILE_LEGACY_AUTH_ENABLED=false%%JWT_ACCESS_TTL=15m%%JWT_REFRESH_TTL=30d%%BETTER_AUTH_URL=${API_URL_PROJECT_NUMBER}%%GCS_MEDIA_BUCKET=${MEDIA_BUCKET}%%DB_POOL_MAX=6%%DB_CONNECTION_TIMEOUT_MS=5000%%DB_STATEMENT_TIMEOUT_MS=10000"
   if [[ -n "$CORS_ORIGIN_EXISTENTE" ]]; then
     API_SET_ENV_VARS="${API_SET_ENV_VARS}%%CORS_ORIGIN=${CORS_ORIGIN_EXISTENTE}"
     info "CORS_ORIGIN existente detectado ('$CORS_ORIGIN_EXISTENTE') — se re-incluye en este deploy para no perderlo."
@@ -798,7 +798,7 @@ if [[ "$NEEDS_API_DEPLOY" == true ]]; then
   #
   # JWT_ACCESS_TTL/JWT_REFRESH_TTL: confirmados leyendo packages/db/src/auth.ts:162,168
   # (Better-Auth, no apps/api/src — por eso no aparecían en un grep acotado a apps/api). Se
-  # fijan acá explícitos con los mismos valores que ya son default en el código (15m/7d,
+  # fijan acá explícitos con los mismos valores que ya son default en el código (15m/30d,
   # ver también .env.example) para que sean ajustables sin rebuildear la imagen.
   #
   # API_PUBLIC_URL NO se incluye: se buscó en todo apps/api/src y el único consumidor real
@@ -1047,7 +1047,7 @@ if [[ "$NEEDS_WORKER_DEPLOY" == true ]]; then
     --vpc-egress=private-ranges-only \
     --add-cloudsql-instances "$CONNECTION_NAME" \
     --set-secrets "RUNTIME_DATABASE_URL=RUNTIME_DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,REDIS_URL=REDIS_URL:latest,SENTRY_DSN=SENTRY_DSN_API:latest" \
-    --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=7d,DB_POOL_MAX=5,DB_CONNECTION_TIMEOUT_MS=5000,DB_STATEMENT_TIMEOUT_MS=60000"
+    --set-env-vars "NODE_ENV=production,MOBILE_LEGACY_AUTH_ENABLED=false,JWT_ACCESS_TTL=15m,JWT_REFRESH_TTL=30d,DB_POOL_MAX=5,DB_CONNECTION_TIMEOUT_MS=5000,DB_STATEMENT_TIMEOUT_MS=60000"
   info "quivo-worker desplegado (Worker Pool, 1 instancia)."
 fi
 

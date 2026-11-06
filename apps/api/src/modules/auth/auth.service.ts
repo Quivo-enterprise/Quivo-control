@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { APIError } from 'better-auth';
 import { hashPassword } from 'better-auth/crypto';
-import { auth, prisma, resolveJwtSecret, withTenantContext } from '@quivo/db';
+import { auth, prisma, resolveJwtSecret, SESSION_TTL_SECONDS, withTenantContext } from '@quivo/db';
 import type {
   AdminResetPasswordRequest,
   LoginRequest,
@@ -40,6 +40,10 @@ const REFRESH_CHAIN_KEY = createHmac('sha256', resolveJwtSecret())
  * listener de `storage` en `apps/web/src/lib/auth/auth-context.tsx`, una pestaña en segundo
  * plano se resincroniza casi al instante con la rotación de otra pestaña. */
 const MAX_ROTACIONES_A_TOLERAR = 3;
+
+/** Ventana en la que reusar el token inmediatamente anterior se trata como duplicado benigno
+ * (no robo): devuelve el token vigente sin rotar. */
+const REFRESH_GRACE_MS = 120_000;
 
 /**
  * Deriva determinísticamente "el token que vendría después" de `tokenAnterior` en la cadena
@@ -86,7 +90,8 @@ export class AuthService {
    * condicionado al token anterior, así que si un token robado se usa antes que el
    * legítimo, el legítimo (o cualquier segundo intento con el mismo token viejo, legítimo
    * o no) deja de encontrar coincidencia y falla — detectando el reuso en vez de dejar el
-   * token robado servir hasta sus 30 días de vida.
+   * token robado servir hasta su vencimiento. Excepción: ventana de gracia de 120 s para el
+   * duplicado benigno (ver `REFRESH_GRACE_MS`). El reuso revoca solo la sesión afectada.
    *
    * A diferencia de `sesionOperativa` (tabla propia de auth-movil, donde solo se persiste
    * el SHA-256 del token — `token-opaco.ts`), la tabla `session` es de Better-Auth: su
@@ -99,44 +104,66 @@ export class AuthService {
     if (!resuelto) {
       throw new UnauthorizedException('Sesión inválida o expirada');
     }
-    const { session, eraTokenVigente } = resuelto;
+    const { session, rotacionesAtras } = resuelto;
+    const sesionId = session.session.id;
 
-    if (!eraTokenVigente) {
-      // El token recibido no era el vigente, pero SÍ es reconstruible como una rotación
-      // pasada de una sesión que sigue viva — reuso de un token viejo (robado, o copiado
-      // por otra pestaña/dispositivo). Hallazgo de security review (QUI-359): antes esto
-      // ni se detectaba acá (con el token ya desactualizado, `getSession` simplemente no
-      // encontraba nada y devolvía 401 genérico) y, en el único caso que sí se detectaba
-      // (la carrera del CAS de abajo), solo se devolvía 401 sin revocar nada — quien
-      // hubiera usado el token robado *primero* se quedaba con el acceso y el usuario
-      // legítimo era el expulsado, al revés de lo que debía pasar. Revocar acá todas las
-      // sesiones del usuario expulsa a ambos, atacante y legítimo, forzando un login limpio
-      // en vez de dejarle la sesión al que llegó primero.
-      await prisma.session.deleteMany({ where: { userId: session.session.userId } });
+    if (rotacionesAtras > 0) {
+      // Token ya rotado. Si es la rotación inmediatamente anterior y la sesión rotó hace
+      // poco, casi seguro es un duplicado benigno (dos pestañas, o una respuesta perdida en
+      // una red móvil mala): se devuelve el token vigente sin rotar de nuevo.
+      if (rotacionesAtras === 1 && this.rotoDentroDeGracia(session.session.updatedAt)) {
+        return this.respuestaConTokenVigente(derivarTokenSiguiente(refreshToken));
+      }
+      // Reuso fuera de la ventana (o de una rotación más vieja): posible token copiado.
+      // Se revoca SOLO esta sesión — las demás sesiones del usuario tienen tokens distintos
+      // y no están comprometidas, así que no hace falta expulsar a todos los que comparten
+      // la cuenta. El token vigente de esta sesión también muere, forzando un login limpio.
+      await prisma.session.deleteMany({ where: { id: sesionId } });
       throw new UnauthorizedException('Sesión inválida o expirada');
     }
 
     const refreshTokenNuevo = derivarTokenSiguiente(refreshToken);
+    const ahora = new Date();
     // Compare-and-swap por `id` (identidad estable de la sesión) *y* `token` (valor
     // vigente) — el `id` no alcanza solo porque dos requests concurrentes con el mismo
     // token viejo deben seguir compitiendo por el mismo swap; el `token` no alcanza solo
     // porque es lo que cambia en cada rotación (ver `logout()` más abajo, que ya no puede
-    // asumir que un token recibido siga siendo el vigente).
+    // asumir que un token recibido siga siendo el vigente). `updatedAt` es la marca de la
+    // última rotación (la ventana de gracia la lee) y `expiresAt` se renueva: ventana
+    // deslizante, una sesión activa no vence a los TTL días de haberse creado.
     const rotado = await prisma.session.updateMany({
-      where: { id: session.session.id, token: refreshToken },
-      data: { token: refreshTokenNuevo },
+      where: { id: sesionId, token: refreshToken },
+      data: {
+        token: refreshTokenNuevo,
+        updatedAt: ahora,
+        expiresAt: new Date(ahora.getTime() + SESSION_TTL_SECONDS * 1000),
+      },
     });
     if (rotado.count !== 1) {
-      // Carrera genuina: otro request concurrente con este mismo token vigente ganó el CAS
-      // justo antes. Mismo tratamiento que el reuso de arriba (revocar la familia completa).
-      await prisma.session.deleteMany({ where: { userId: session.session.userId } });
+      // Perdió la carrera del CAS contra otro request con este mismo token. Se relee la
+      // sesión: si el ganador acaba de rotar (dentro de la ventana) y el token vigente es
+      // el siguiente de este, es un duplicado benigno; si no, se revoca solo esta sesión.
+      const actual = await prisma.session.findUnique({ where: { id: sesionId } });
+      if (
+        actual &&
+        actual.token === refreshTokenNuevo &&
+        this.rotoDentroDeGracia(actual.updatedAt)
+      ) {
+        return this.respuestaConTokenVigente(actual.token);
+      }
+      await prisma.session.deleteMany({ where: { id: sesionId } });
       throw new UnauthorizedException('Sesión inválida o expirada');
     }
 
-    return {
-      accessToken: await this.mintAccessToken(refreshTokenNuevo),
-      refreshToken: refreshTokenNuevo,
-    };
+    return this.respuestaConTokenVigente(refreshTokenNuevo);
+  }
+
+  private rotoDentroDeGracia(ultimaRotacion: Date): boolean {
+    return Date.now() - ultimaRotacion.getTime() < REFRESH_GRACE_MS;
+  }
+
+  private async respuestaConTokenVigente(refreshToken: string): Promise<RefreshResponse> {
+    return { accessToken: await this.mintAccessToken(refreshToken), refreshToken };
   }
 
   /** POST /v1/auth/logout (QUI-251) — revoca la sesión de verdad en la DB, no solo un
@@ -171,16 +198,16 @@ export class AuthService {
    * común: sigue siendo el vigente, sin costo extra); si no matchea, deriva hacia adelante
    * y reintenta, hasta encontrar una sesión viva o agotar el margen.
    *
-   * `eraTokenVigente` le dice al caller si el token recibido era efectivamente el actual
-   * (`refresh()` lo usa para distinguir una rotación normal de un reuso detectado) o si tuvo
-   * que reconstruirse desde una rotación pasada.
+   * `rotacionesAtras` le dice al caller cuántas rotaciones atrás estaba el token recibido
+   * (0 = era el vigente; `refresh()` lo usa para distinguir una rotación normal, un duplicado
+   * benigno dentro de la ventana de gracia y un reuso).
    */
   private async resolverSesionConTolerancia(tokenPresentado: string) {
     let candidato = tokenPresentado;
     for (let intento = 0; intento <= MAX_ROTACIONES_A_TOLERAR; intento++) {
       const session = await auth.api.getSession({ headers: this.bearerHeaders(candidato) });
       if (session) {
-        return { session, eraTokenVigente: intento === 0 };
+        return { session, rotacionesAtras: intento };
       }
       candidato = derivarTokenSiguiente(candidato);
     }

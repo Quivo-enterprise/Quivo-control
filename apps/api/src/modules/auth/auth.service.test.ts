@@ -29,16 +29,11 @@ describe('AuthService (contra Better-Auth real)', () => {
     );
   });
 
-  // QUI-359: el refresh token debía rotar en cada uso (antes, `refresh()` devolvía el
-  // mismo token indefinidamente — un token robado servía hasta 30 días sin detección).
-  //
-  // Hallazgo de security review (actualizado en esta misma rama): reusar un token ya
-  // rotado ahora revoca la *familia completa* de sesión del usuario, no solo rechaza el
-  // intento con el token viejo. Antes solo se devolvía 401 y la sesión ya rotada seguía
-  // viva — quien usara el token robado *primero* se quedaba con el acceso y el usuario
-  // legítimo era el expulsado, al revés de lo que debía pasar. Por eso el token que
-  // "ganó" la rotación (`primerRefresh.refreshToken`) tampoco sigue sirviendo después.
-  it('rota el refresh token en cada uso; reusar el token viejo tras rotar revoca toda la sesión (detección de reuso)', async () => {
+  // QUI-359: el refresh token debe rotar en cada uso. Reusar el token inmediatamente anterior
+  // dentro de la ventana de gracia (120 s) es un duplicado benigno (dos pestañas, respuesta
+  // perdida): devuelve el token vigente sin rotar. Fuera de la ventana (cubierto con reloj
+  // simulado en auth.service.refresh.test.ts) o con un token más viejo, se revoca solo esa sesión.
+  it('rota el refresh token en cada uso; reusar el anterior dentro de la ventana devuelve el vigente sin rotar', async () => {
     const authService = new AuthService();
     const { refreshToken: refreshTokenInicial } = await authService.login({
       email: 'admin@quivo.local',
@@ -47,21 +42,18 @@ describe('AuthService (contra Better-Auth real)', () => {
 
     const primerRefresh = await authService.refresh({ refreshToken: refreshTokenInicial });
     expect(primerRefresh.accessToken).toEqual(expect.any(String));
-    expect(primerRefresh.refreshToken).toEqual(expect.any(String));
-    // No es el mismo que el usado para pedirlo: rotó.
     expect(primerRefresh.refreshToken).not.toBe(refreshTokenInicial);
 
-    // Reusar el token ya rotado (ej. un atacante que lo copió antes de que el usuario
-    // legítimo refrescara) debe fallar — se reconstruye a qué sesión pertenecía (aunque ya
-    // no matchea directamente) y se detecta como reuso.
-    await expect(
-      authService.refresh({ refreshToken: refreshTokenInicial }),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+    const repetido = await authService.refresh({ refreshToken: refreshTokenInicial });
+    expect(repetido.refreshToken).toBe(primerRefresh.refreshToken);
 
-    // El token que "ganó" la rotación tampoco sigue sirviendo — la sesión completa quedó
-    // revocada, no solo el intento con el token viejo.
+    // Dos rotaciones atrás ya no es tolerado: 401, y solo esa sesión se revoca.
+    const segundoRefresh = await authService.refresh({ refreshToken: primerRefresh.refreshToken });
+    await expect(authService.refresh({ refreshToken: refreshTokenInicial })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
     await expect(
-      authService.refresh({ refreshToken: primerRefresh.refreshToken }),
+      authService.refresh({ refreshToken: segundoRefresh.refreshToken }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 

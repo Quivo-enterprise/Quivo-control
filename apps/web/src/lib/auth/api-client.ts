@@ -18,6 +18,14 @@ export async function loginRequest(email: string, password: string): Promise<Log
   return (await response.json()) as LoginResponse;
 }
 
+/** Error de refresh con respuesta HTTP: `status` distingue un 401 real (sesión muerta) de un
+ * 5xx transitorio. Un fallo de red lanza el `TypeError` de `fetch`, sin `status`. */
+export class RefreshHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Refresh de sesión falló (HTTP ${status})`);
+  }
+}
+
 export async function refreshRequest(refreshToken: string): Promise<RefreshResponse> {
   const response = await fetch(`${API_URL}/v1/auth/refresh`, {
     method: 'POST',
@@ -26,7 +34,7 @@ export async function refreshRequest(refreshToken: string): Promise<RefreshRespo
   });
 
   if (!response.ok) {
-    throw new Error(`Refresh de sesión falló (HTTP ${response.status})`);
+    throw new RefreshHttpError(response.status);
   }
 
   return (await response.json()) as RefreshResponse;

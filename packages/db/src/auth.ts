@@ -145,6 +145,8 @@ export function resolveJwtSecret(): string {
  *   registra `login`/`refresh`) — el control de acceso real es "no existe la ruta", no
  *   este flag. Dejarlo en `true` también bloquearía el `signUpEmail` que usa el seed.
  */
+export const SESSION_TTL_SECONDS = parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '30d');
+
 export const auth = betterAuth({
   secret: resolveJwtSecret(),
   database: prismaAdapter(prisma, { provider: 'postgresql' }),
@@ -158,8 +160,9 @@ export const auth = betterAuth({
     },
   },
   session: {
-    // QUI-356: bajado de 30d a 7d — un refresh token robado servía un mes entero.
-    expiresIn: parseDurationToSeconds(process.env.JWT_REFRESH_TTL ?? '7d'),
+    // Ventana deslizante: `AuthService.refresh` renueva `expiresAt` con este mismo TTL en cada
+    // rotación, así que 30d son 30 días de *inactividad*, no de vida total de la sesión.
+    expiresIn: SESSION_TTL_SECONDS,
   },
   plugins: [
     bearer(),
