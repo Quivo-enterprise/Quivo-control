@@ -228,10 +228,11 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
     ts: Date,
     accuracy: number,
   ): Promise<void> {
+    // ultimo_ingreso_ts = now() real (no ts): el barrido global de rotaciones.service.test cierra sesiones sin actividad real >3 h.
     await tx.$executeRaw`
       INSERT INTO gps_sesion_resumen
         (sesion_id, jornada, "sindicatoId", total_puntos, ultimo_fix_ts, ultimo_ingreso_ts, lat, lng, accuracy, speed, updated_at)
-      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, ${ts}::timestamptz, ${pos.lat}, ${pos.lng}, ${accuracy}, 8, now())
+      VALUES (${sesionId}::uuid, ${JORNADA}::date, ${sindicatoId}, 1, ${ts}::timestamptz, now(), ${pos.lat}, ${pos.lng}, ${accuracy}, 8, now())
       ON CONFLICT (sesion_id, jornada, "sindicatoId") DO UPDATE SET
         ultimo_fix_ts = EXCLUDED.ultimo_fix_ts, lat = EXCLUDED.lat, lng = EXCLUDED.lng
     `;
