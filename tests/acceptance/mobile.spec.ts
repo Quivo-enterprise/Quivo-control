@@ -544,10 +544,27 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveAttribute('href', '/alertas');
       await expect(barra.getByRole('button', { name: 'Siguiente alerta' })).toHaveCount(0);
 
+      // Con alertas abiertas la campana no es verde (el verde es "todo en orden").
+      const colores = await barra.locator('.qv-live-alertas__vacio svg').evaluate((el) => {
+        const sonda = document.createElement('i');
+        sonda.style.color = 'var(--qv-color-success)';
+        document.body.appendChild(sonda);
+        const exito = getComputedStyle(sonda).color;
+        sonda.remove();
+        return { icono: getComputedStyle(el).color, exito };
+      });
+      expect(colores.icono).not.toBe(colores.exito);
+
       hoy = [];
       await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
       await expect(barra).toContainText('Sin infracciones abiertas', { timeout: 30_000 });
       await expect(barra.getByRole('link', { name: 'Ver alertas' })).toHaveCount(0);
+
+      // Sin datos y con la consulta fallando (reintentos ~15 s) no queda un grupo vacío.
+      await page.unroute('**/v1/reportes/en-vivo/infracciones*');
+      await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ status: 500, json: { message: 'x' } }));
+      await page.goto('/en-vivo', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await expect(barra).toContainText('Alertas del día sin cargar', { timeout: 40_000 });
     } finally {
       await page.unroute('**/v1/reportes/en-vivo/posiciones*');
       await page.unroute('**/v1/reportes/en-vivo/infracciones*');

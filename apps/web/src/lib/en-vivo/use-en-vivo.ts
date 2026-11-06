@@ -270,12 +270,12 @@ export function useInfraccionesSesion(token: string | null, sesionId: string | n
 }
 
 /** Alertas de hoy (`/alertas`): misma cadencia que la lista de infracciones de la sesión. */
-export function useInfraccionesHoy(token: string | null) {
+export function useInfraccionesHoy(token: string | null, intervaloMs: number = INTERVALO_POLL_MS) {
   return useQuery<InfraccionHoy[]>({
     queryKey: ['en-vivo', 'infracciones-hoy'],
     enabled: Boolean(token),
     queryFn: () => infraccionesApi.listarHoy(token as string),
-    refetchInterval: INTERVALO_POLL_MS,
+    refetchInterval: intervaloMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: REINTENTOS,

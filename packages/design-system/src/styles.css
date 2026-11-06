@@ -3974,6 +3974,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
 .qv-live-alertas__vacio svg {
   color: var(--qv-color-success);
 }
+.qv-live-alertas__vacio--hay svg {
+  color: var(--qv-alerta-grave);
+}
 .qv-live-nivel {
   --qv-nivel: var(--qv-alerta-leve);
   display: inline-flex;

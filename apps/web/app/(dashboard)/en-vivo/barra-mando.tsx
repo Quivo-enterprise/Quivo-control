@@ -46,12 +46,14 @@ interface BarraMandoProps {
   nivelFiltro: GravedadRegla | null;
   onNivel: (nivel: GravedadRegla | null) => void;
   alertasPendientes: number;
-  /** Alertas abiertas de hoy (`useInfraccionesHoy`); `null` mientras carga o si falló. */
-  abiertasHoy: number | null;
+  /** Vehículos con alerta abierta en el mapa ANTES del filtro de nivel/estado (la línea sí aplica). */
+  alertasEnMapa: number;
+  /** Alertas abiertas de hoy (`useInfraccionesHoy`); sin datos, `'cargando'` o `'error'`. */
+  abiertasHoy: number | 'cargando' | 'error';
   /** El `operador` no puede abrir /alertas. */
   puedeVerAlertas: boolean;
   resumenAlertas: string;
-  siguienteAlertaRef: RefObject<HTMLButtonElement>;
+  siguienteAlertaRef: RefObject<HTMLButtonElement & HTMLAnchorElement>;
   onSiguienteAlerta: () => void;
   flotaAbierta: boolean;
   /** Sin HUD de flota no hay panel que abrir. */
@@ -61,7 +63,7 @@ interface BarraMandoProps {
 
 export function BarraMando(p: BarraMandoProps) {
   const sinInfracciones = NIVELES_DESC.every((n) => p.conteoNiveles[n] === 0) && !p.nivelFiltro;
-  const dia = resumenAlertasDia(p.abiertasHoy, p.alertasPendientes, p.puedeVerAlertas);
+  const dia = resumenAlertasDia(p.abiertasHoy, p.alertasEnMapa, p.puedeVerAlertas);
   return (
     <header className="qv-live-barra" aria-label="Barra de mando de En vivo">
       <div className="qv-live-barra__fila">
@@ -133,9 +135,9 @@ export function BarraMando(p: BarraMandoProps) {
         solo: cada nivel lleva su ícono y su texto. */}
         <div className="qv-live-alertas" role="group" aria-label="Alertas por infracción">
           {sinInfracciones ? (
-            // Sin texto (día cargando o fallido) no se afirma nada: un cero falso es peor que el hueco.
+            // Sin texto (día cargando) no se afirma nada: un cero falso es peor que el hueco.
             dia.texto && (
-              <span className="qv-live-alertas__vacio">
+              <span className={`qv-live-alertas__vacio${typeof p.abiertasHoy === 'number' && p.abiertasHoy > 0 ? ' qv-live-alertas__vacio--hay' : ''}`}>
                 {p.abiertasHoy === 0 ? <CircleCheck size={14} aria-hidden="true" /> : <BellRing size={14} aria-hidden="true" />}
                 {dia.texto}
               </span>
@@ -167,7 +169,7 @@ export function BarraMando(p: BarraMandoProps) {
         </div>
 
         {dia.boton === 'enlace' && (
-          <Link className="qv-live-btn qv-live-btn--primario" href="/alertas">
+          <Link ref={p.siguienteAlertaRef} className="qv-live-btn qv-live-btn--primario" href="/alertas">
             <BellRing size={14} aria-hidden="true" />
             Ver alertas
           </Link>
