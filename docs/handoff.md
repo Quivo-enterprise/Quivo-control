@@ -17,13 +17,15 @@ Prueba con el APK 17 en dos emuladores (`quivo_trufi2`, `quivo_trufi3`) contra p
 
 **No probado en vivo: doble vía.** Hubo dos tandas: 13:41–14:08 y 14:25–14:45 hora Bolivia. En las tres pasadas largas, el emulador que conducía se cayó a los ~7 min. El que estaba quieto nunca se cayó. Pasó con los dos AVD y también con `-memory 2048/3072`. El kernel no registra OOM; el log solo trae avisos de SwiftShader. El último intento, saltando parada por parada con 15 s en cada una, tampoco sirvió: tras reiniciar, la app ya no tomaba posiciones (ver abajo). La doble vía sigue cubierta solo por el test de integración de #338 y por los datos reales de 5360NII. **En esta máquina no se puede probar.** Hace falta un celular real o un host con más RAM o GPU.
 
-**Hallazgo — GPS tras reinicio del teléfono (posible bug, sin confirmar en un celular real):**
-- Con una sesión en ruta, se reinicia el emulador (equivale a reiniciar el teléfono) y se abre la app. La app vuelve a la pantalla de ruta como "EN VIVO", sin ningún aviso.
-- Pero no sube más GPS: 1616PIB tiene su último punto a las 18:29:04Z, y a las 18:37 solo se envió la cola pendiente.
-- Durante esos minutos, Android sí recibía las posiciones nuevas (`dumpsys location`).
-- El SDK logueó `Enable: true → true, trackingMode: 1` y después nada: ni una posición. La primera vez (13:59) apareció "El GPS se detuvo. Toca Finalizar y vuelve a Comenzar."; esta vez no hubo aviso.
-- Hipótesis no verificada: tras el boot el SDK queda en estacionario. El emulador no tiene sensor de actividad que lo saque de ahí, y el re-enganche (`seguimiento-continuo.ts`) no se ejecutaría o no basta.
-- Siguiente paso: reiniciar un celular real con una sesión en ruta y mirar si sigue llegando GPS. Si falla, diagnóstico con `/codex-debug diagnose` y fix por Sonnet.
+**GPS tras reinicio del teléfono: no se reprodujo.** Prueba del 6/11, 19:00–21:48Z, con un solo emulador moviéndose a 8 m/s y la sesión `f913aa44` de 1616PIC (ver en la DB los puntos por minuto):
+- Reinicio normal (`adb reboot`) sin abrir la app: el SDK arrancó solo (servicio en primer plano) y siguió subiendo GPS, 54 puntos en 2 min.
+- Lo mismo y después abrir la app: siguió subiendo y las paradas avanzaron (#4).
+- Corte en seco (`kill -9` del emulador, como quedarse sin batería) sin abrir la app: volvió a subir en cuanto hubo movimiento, unos 26 por minuto.
+- Corte en seco y abrir la app a los 35 s (el caso que antes había fallado): siguió subiendo hasta que el emulador volvió a caerse.
+
+La falla de las 14:37 queda sin causa probada. Hipótesis: en ese intento el GPS estaba quieto, con 1 m de ruido por debajo del `distanceFilter`, o saltaba kilómetros entre paradas, algo que el SDK probablemente descarta como ruido. Igual conviene una prueba en un celular real con un reinicio a mitad de ruta.
+
+**Causa de las caídas del emulador:** `Segmentation fault (core dumped)` del propio proceso del emulador (crashdata en `/tmp/android-shadowfreak/emu-crash-37.2.12.db`). No es falta de memoria. Le pasa al emulador que se mueve, probablemente por el render del mapa con SwiftShader. En esta máquina, cualquier prueba larga en movimiento corta a los ~7 min.
 
 **Licencia Transistorsoft del paquete `.piloto`:** el log del 6/11 dice "trial license key has 17 days remaining", así que vence alrededor del **23/11**. Comprar la licencia y sacar un APK nuevo antes, o el GPS deja de arrancar como pasó con el APK 16 el 25/10.
 
@@ -33,7 +35,7 @@ Prueba con el APK 17 en dos emuladores (`quivo_trufi2`, `quivo_trufi3`) contra p
 - Tras reiniciar el emulador, la app recuperó la sesión con "El GPS se detuvo", y al volver a Comenzar ruta no subió más GPS: 1616PIC tiene su último punto a las 17:52:25Z. El emulador cayó poco después, así que no se sabe si es un fallo de la app. Revisar si un celular real que se reinicia a mitad de ruta sigue subiendo GPS.
 - Un `geo fix 0 0` mandado por error a los dos emuladores no llegó a la base: 0 puntos cerca de 0,0.
 
-**Datos en prod, segunda tanda:** sesiones `3bb8cf4c` (1616PIC, 238 puntos) y `f6fc4927` (1616PIB, 74 puntos) cerradas a mano (`quivo-migraciones-dfrxt`, verificado en `quivo-migraciones-v8s5t`), con 0 infracciones. Durante la prueba había un chofer real conectado, 4401KRS, que vio a los trufis de prueba en vecinos. Su sesión no se tocó y sigue activa.
+**Datos en prod, segunda tanda:** sesiones `3bb8cf4c` (1616PIC, 238 puntos) y `f6fc4927` (1616PIB, 74 puntos) cerradas a mano (`quivo-migraciones-dfrxt`, verificado en `quivo-migraciones-v8s5t`), con 0 infracciones. La sesión de la prueba de reinicio, `f913aa44` (1616PIC), también se cerró (`quivo-migraciones-gdgzn`). A las 21:48Z, 4401KRS (chofer real) seguía con su sesión activa. Durante la prueba había un chofer real conectado, 4401KRS, que vio a los trufis de prueba en vecinos. Su sesión no se tocó y sigue activa.
 
 **Datos en prod:** sesiones `e6ed651e` (1616PIC, 237 puntos GPS) y `5abf5339` (1616PIB, 244 puntos) cerradas a mano, solo esas dos: ejecución `quivo-migraciones-879jp`, verificada en `quivo-migraciones-x8dw7`. Las dos filas de `fila_salida` quedaron en `salio`. 0 infracciones, 0 sesiones activas al cerrar. Los datos GPS quedan guardados.
 
