@@ -14,7 +14,7 @@ import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
 import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
 import { useSaludRefresco } from '../../src/lib/en-vivo/use-salud-refresco';
-import { BUSQUEDA_MIN, buscarHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
+import { BUSQUEDA_MIN, buscarHoy, fechaHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
 
 interface Kpi {
@@ -72,16 +72,6 @@ function PildoraEnVivo({ consulta }: { consulta: { dataUpdatedAt: number; isErro
       {texto}
     </span>
   );
-}
-
-/** "Mié 5 nov" en hora de La Paz (el servidor y el celular pueden estar en otra zona). */
-function fechaHoy(ahora: Date = new Date()): string {
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat('es-BO', { timeZone: 'America/La_Paz', weekday: 'short', day: 'numeric', month: 'short' })
-      .formatToParts(ahora)
-      .map((x) => [x.type, x.value.replace('.', '')]),
-  );
-  return `${p.weekday!.charAt(0).toUpperCase()}${p.weekday!.slice(1)} ${p.day} ${p.month}`;
 }
 
 export function HoyMovil() {

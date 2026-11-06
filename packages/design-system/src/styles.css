@@ -5053,18 +5053,15 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     border-bottom: 1px solid var(--qv-border-subtle);
   }
 
-  .qv-admin-layout:has(.qv-page-header) .qv-admin-layout__topbar {
+  .qv-admin-layout--tabs:has(.qv-page-header) .qv-admin-layout__topbar {
     display: none;
   }
 
-  .qv-admin-layout:has(.qv-page-header) .qv-admin-layout__content {
+  .qv-admin-layout--tabs:has(.qv-page-header) .qv-admin-layout__content {
     padding-top: 0;
   }
 
   .qv-page-header {
-    position: sticky;
-    top: 0;
-    z-index: 30;
     box-sizing: border-box;
     flex-wrap: wrap;
     align-items: center;
@@ -5074,6 +5071,12 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     padding: calc(6px + env(safe-area-inset-top)) 16px 12px;
     background: var(--qv-surface-card);
     border-bottom: 1px solid var(--qv-border-subtle);
+  }
+
+  .qv-admin-layout--tabs .qv-page-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
   }
 
   .qv-page-header__copy {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Conductor, JornadaVehiculo, Vehiculo } from '@quivo/shared';
-import { buscarHoy, normalizarBusqueda } from './hoy.logic';
+import { buscarHoy, fechaHoy, normalizarBusqueda } from './hoy.logic';
 
 const veh = (id: string, placa: string) => ({ id, placa }) as Vehiculo;
 const cond = (id: string, nombre: string, telefono: string | null) => ({ id, nombre, telefono }) as Conductor;
@@ -52,5 +52,13 @@ describe('buscarHoy', () => {
     expect([tipos(b.resultados, 'vehiculo'), tipos(b.resultados, 'conductor')]).toEqual([18, 2]);
     const c = buscarHoy('pedro', vs.slice(0, 3), cs, []);
     expect([tipos(c.resultados, 'vehiculo'), tipos(c.resultados, 'conductor')]).toEqual([3, 17]);
+  });
+});
+
+describe('fechaHoy', () => {
+  it('usa la fecha de La Paz aunque en UTC ya sea el día siguiente, sin puntos', () => {
+    const r = fechaHoy(new Date('2026-11-06T02:30:00Z'));
+    expect(r).toBe('Jue 5 nov');
+    expect(r).not.toContain('.');
   });
 });
