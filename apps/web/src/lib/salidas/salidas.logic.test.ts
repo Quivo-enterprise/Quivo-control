@@ -2,6 +2,7 @@ import { CrearFrecuenciaReglaSchema } from '@quivo/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ajustarBase,
+  conductorDeFila,
   conductorPorVehiculoEnVivo,
   estadoVisualFila,
   formatearCuenta,
@@ -163,5 +164,18 @@ describe('conductorPorVehiculoEnVivo', () => {
   });
   it('si el vehículo se repite, gana la primera', () => {
     expect(conductorPorVehiculoEnVivo([pos({ conductorNombre: 'Ana' }), pos({ conductorNombre: 'Beto' }), pos({ vehiculoId: 'v2', conductorNombre: 'Cora' })])).toEqual({ v1: 'Ana', v2: 'Cora' });
+  });
+});
+
+describe('conductorDeFila', () => {
+  it('prefiere el conductor que trae la fila', () => {
+    expect(conductorDeFila({ vehiculoId: 'v1', conductorNombre: 'Ana' }, { v1: 'Beto' })).toBe('Ana');
+  });
+  it('cae al de las posiciones en vivo si la fila no lo trae', () => {
+    expect(conductorDeFila({ vehiculoId: 'v1', conductorNombre: null }, { v1: 'Beto' })).toBe('Beto');
+    expect(conductorDeFila({ vehiculoId: 'v1' }, { v1: 'Beto' })).toBe('Beto');
+  });
+  it('sin ninguno devuelve undefined', () => {
+    expect(conductorDeFila({ vehiculoId: 'v1', conductorNombre: null }, {})).toBeUndefined();
   });
 });

@@ -88,6 +88,14 @@ export function conductorPorVehiculoEnVivo(
   return mapa;
 }
 
+/** Conductor de una fila: el que trae el API; si no (API viejo o sin dato), el de las posiciones en vivo. */
+export function conductorDeFila(
+  item: { vehiculoId: string; conductorNombre?: string | null },
+  enVivo: Record<string, string>,
+): string | undefined {
+  return item.conductorNombre || enVivo[item.vehiculoId];
+}
+
 /** Franja de una regla: "08:00–10:30" o "Todo el día". */
 export function textoFranja(desdeMin: number | null, hastaMin: number | null): string {
   if (desdeMin === null || hastaMin === null) return 'Todo el día';

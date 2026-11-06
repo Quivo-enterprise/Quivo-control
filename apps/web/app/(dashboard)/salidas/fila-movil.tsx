@@ -11,6 +11,7 @@ import {
   ETIQUETA_ESTADO_FILA,
   ETIQUETA_ORIGEN,
   TEXTO_PROGRESO,
+  conductorDeFila,
   estadoVisualFila,
   formatearCuenta,
   restanteMs,
@@ -103,7 +104,7 @@ export function FilaMovil({ items, cargando, error, offsetMs, conductores, inter
           {items.map((r, i) => {
             const primera = i === 0;
             const haciendo = (Object.keys(TEXTO_PROGRESO) as TipoAccion[]).find((t) => progreso(t, r.id));
-            const detalle = [internos[r.vehiculoId] && `Int. ${internos[r.vehiculoId]}`, conductores[r.vehiculoId]].filter(Boolean).join(' · ');
+            const detalle = [internos[r.vehiculoId] && `Int. ${internos[r.vehiculoId]}`, conductorDeFila(r, conductores)].filter(Boolean).join(' · ');
             return (
               <li key={r.id} className={`qv-fila-m__item${primera ? ' qv-fila-m__item--primera' : ''}`}>
                 <div className="qv-fila-m__fila">
