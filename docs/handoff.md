@@ -95,7 +95,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - El PIN lo tiene el CTO.
   - Asignaciones del 5/11 y el 6/11, turno mañana, en la rotación aparte `canaviru-3792CAH` (publicada). No se tocó `piloto-linea-16`.
   - **Pendiente:** desde el 7/11 necesita una asignación en la rotación del día. Una rotación publicada no acepta altas sueltas, solo en borrador.
-- **Avance (nada desplegado; prod sigue en r37, #313 tampoco está en prod):**
+- **Avance (PR 1–10 mergeados; desplegado en r38, solo web, ver abajo):**
   - **PR 1, #314, mergeado (`84cb00b`).** Fuera la base de 18 px (vuelve a 16). Tokens de B solo a ≤720 px: texto secundario #475569, borde fuerte #94a3b8, radios 10/14/18, `line-height` 1.45 y variante oscura. Los botones de la fila ahora sí miden 48 px. Escritorio: 0 px de diferencia.
   - **PR 2, #315, mergeado (`43c2073`).**
     - Encabezado único: con pestañas, el `PageHeader` reemplaza la topbar.
@@ -133,9 +133,25 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - El menú ⋯ conserva Flota, Días anteriores, Siguiente alerta, filtro por nivel, Seguir, Ampliar y Refrescar. El operador no tiene pestaña Alertas: ve el conteo en una insignia sobre ⋯.
     - El chip de salud pierde "hace" hasta 469 px y los segundos hasta 409 px, para que "Línea 16" no se corte. A 412 px difiere del comp, que no tenía el ⋯.
     - Pendiente: unificar `MenuFila` de Salidas con `MenuAcciones`.
-  - **PR 9 (marcadores píldora):** este PR.
-    - PR 9: color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
+  - **PR 9, #322, mergeado (`4ad5868`).** Marcadores píldora.
+    - Incidente: un comando encadenado (verificación + merge + limpieza) borró la rama con `acceptance` en rojo y cerró el PR; el merge no ocurrió por un 504. Se reabrió y se arregló el harness del spec (2 columnas). Regla: verificar, mergear y limpiar en llamadas separadas.
+    - Color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
     - La key de Google Maps no funciona en localhost: los marcadores solo se verificaron en un harness aislado, no sobre el mapa real.
+  - **PR 10, #323, mergeado (`83638e1`).** Hoja del vehículo con el diseño B en el celular.
+    - Placa grande, tag de línea (baja de fila a 360 px), estado con forma y km/h solo reportando, tiles Hoy y Alertas ("Cargando…" / "Sin cargar" mientras no hay datos), "Designación" con check, Llamar y Ver recorrido grandes. Plegada a alto ≤739 oculta el detalle.
+    - Escritorio sin cambios (capturas 1440/900 idénticas).
+    - Gates: `/code-review` sin hallazgos, `/ponytail-review` Ship (nit no aplicado: fragmento redundante en `panel-vehiculo.tsx`).
+  - **Plan de 10 PRs completo en `main`.**
+  - **Deploy r38 (6/11 madrugada, OK anticipado del CTO): solo web.** `quivo-web-00026-hdk`, imagen `web:r38-20261106`, desde `83638e1`. Sin cambios de API/worker/DB desde r37 (`git log 955b153..83638e1 -- apps/api apps/worker packages/db packages/shared` vacío); el script igual creó `quivo-api-00055-rf7` (solo `CORS_ORIGIN`, misma imagen r37). `/v1/health/ready` ok. Rollback web: `quivo-web-00025-d77` (r37); API: `quivo-api-00054-snb`.
+    - Verificado en prod (Playwright, Pixel 7, cuenta admin_quivo): Hoy, En vivo, Salidas, Alertas y Más con el diseño B y la barra de pestañas, overflow 0, sin errores de consola salvo el aviso de Google Maps "Vector Map… Falling back to Raster" (WebGL del navegador headless).
+    - **Delegado (admin_sindicato) ve todos los trufis:** prod tiene 1 sindicato con los 45 vehículos; `/reportes/en-vivo/posiciones` filtra solo por sindicato (RLS, `withTenantContext`, límite 500). A las 03:20 (hora Bolivia) no había sesiones activas: **no se vio con trufis en vivo** ni con la cuenta del delegado (no hay credenciales suyas aquí). Verificar en la mañana con la cuenta del delegado: el chip "N de M" debe contar todas las sesiones del día. Un trufi sin sesión hoy no aparece en el mapa (regla previa).
+    - Marcadores píldora sobre el Google Maps real: no verificados (sin vehículos en vivo).
+  - **Pendientes que salieron en la revisión (fuera de los PRs):**
+    - `mobile.spec.ts` usa datos reales (nombre de chofer y placas como 4701EHA) en mocks: pasar a datos ficticios.
+    - `StatusBadge` `idle` en el celular: texto #94a3b8 sobre blanco (~2.6:1), bajo contraste ("Esperando").
+    - `touch-action: manipulation` falta en la lista de Más y en Salir.
+    - Unificar `MenuFila` con `MenuAcciones`; borrar el drawer móvil sin uso; `conductorNombre` en el API de la fila; separar un `CabeceraMovil` de las ramas `esMovil`.
+    - No verificado: dispositivo físico, modo oscuro, iOS.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
   - **Encabezado móvil (cerrado en PR 6):** el título va en una línea con elipsis, así la altura sticky no cambia y el `scroll-padding-top` no queda corto. Títulos largos en otras páginas pueden cortarse a 360 px; solo se revisó `/salidas`.
   - **Codex: no verificado (sin cuota).**
@@ -151,7 +167,7 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     3. Investigar el 401 del refresh con `/codex-debug diagnose` en paralelo con el diagnóstico propio, para descartar que les pase a choferes reales. Código: `apps/mobile/src/shared/api/auth-movil-api.ts` (`refresh`) y `AuthMovilService.refresh` en `apps/api/src/modules/auth-movil/auth-movil.service.ts`.
   - Con cualquiera de las tres, revisar que la vuelta simulada no le genere sanciones a 4701EHA.
 - `piloto-linea-16` tiene asignaciones para el 5/11 (+39, aplicado por el CTO "agregas nomás"): 37 activos más 2 días faltantes de 1616PIL.
-- Deploy r37 hecho el 5/11: prod está en `r37-20261105`.
+- Deploy r37 hecho el 5/11 (`r37-20261105`). El 6/11 la web pasó a `r38-20261106`; API y worker siguen en r37.
 
 ## 2026-11-05: panel admin + En vivo en celular, instalable como PWA (A+B+C mergeados; deploy pendiente de OK)
 
