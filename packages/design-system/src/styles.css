@@ -4998,6 +4998,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-decoration: none;
     white-space: nowrap;
+    touch-action: manipulation;
   }
   .qv-live-panel__m-btn--pri {
     background: var(--qv-color-primary);
@@ -5895,6 +5896,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-align: left;
     cursor: pointer;
+    touch-action: manipulation;
   }
   .qv-menu-ac__item:hover,
   .qv-menu-ac__item:focus-visible {
@@ -6480,6 +6482,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 700;
     text-align: left;
     cursor: pointer;
+    touch-action: manipulation;
   }
 
   .qv-fila-m__menu-item:hover,
@@ -7418,6 +7421,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font-weight: 700;
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .qv-mas-list__link:active {
@@ -7474,6 +7478,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .qv-mas-logout:focus-visible {
