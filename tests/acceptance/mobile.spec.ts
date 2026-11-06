@@ -156,7 +156,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       conductorId: '00000000-0000-4000-8000-0000000000c1', lineaId: '00000000-0000-4000-8000-0000000000d1',
       rutaId: '00000000-0000-4000-8000-0000000000e1', reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
       sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
-      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', sesionId: '00000000-0000-4000-8000-0000000000f1',
+      vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', sesionId: '00000000-0000-4000-8000-0000000000f1',
       tipo: 'pc_omitido', gravedad: 'leve', inicioTs: new Date().toISOString(), detalle: {},
     };
     const abiertas = [1, 2, 3].map((n) => ({ ...base, id: `00000000-0000-4000-8000-00000000000${n}`, estado: 'abierta' }));
@@ -230,7 +230,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     // El conductor sale de /reportes/en-vivo/posiciones (la leen admin y operador); /reportes/jornadas es solo admin.
     const posiciones = [
       PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
         lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
         totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
         antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
@@ -318,7 +318,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       expect(puts).toBe(0);
 
       // Fila: conductor por vehículo (posiciones en vivo), estado de la cola con su hora de salida, y Despachar solo en la primera, a todo el ancho y de 60 px.
-      await expect(page.getByText('Bravo Soliz Javier')).toBeVisible();
+      await expect(page.getByText('Pérez Prueba Ana')).toBeVisible();
       await expect(page.locator('.qv-fila-m__estado').first()).toContainText('Sale ');
       await expect(page.locator('.qv-fila-m__estado').nth(2)).toContainText('En turno');
       await expect(page.locator('.qv-fila-m__estado').first()).toContainText('Esperando');
@@ -432,7 +432,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     let visibles = [...todos];
     const posiciones = [
       PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
         lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
         totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
         antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
@@ -696,7 +696,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     });
     const posiciones = [
       PosicionEnVivoSchema.parse({
-        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Bravo Soliz Javier',
+        id: uuid(80), deviceId: 'd1', activa: true, vehiculoPlaca: '1234ABC', conductorNombre: 'Pérez Prueba Ana',
         lineaId: uuid(1), lineaNombre: 'Linea 120', rutaSentido: 'ida', lat: -17.4, lng: -66.2, accuracy: 5, speed: 0,
         totalPuntos: 3, vehiculoId: uuid(21), ultimoFixTs: iso(0), ultimoIngresoTs: iso(0), servidorTs: iso(0),
         antiguedadFixMs: 4000, antiguedadIngestaMs: 4000, inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
@@ -735,7 +735,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       });
       await op.goto('/salidas', { waitUntil: 'domcontentloaded', timeout: 60_000 });
       await expect(op.getByRole('button', { name: 'Despachar 1234ABC' })).toBeVisible({ timeout: 30_000 });
-      await expect(op.getByText('Bravo Soliz Javier')).toBeVisible();
+      await expect(op.getByText('Pérez Prueba Ana')).toBeVisible();
       await op.waitForTimeout(1_500);
       expect(jornadas).toEqual([]);
     } finally {
@@ -870,12 +870,12 @@ test.describe('Panel móvil (Pixel 7)', () => {
       conductorId: '00000000-0000-4000-8000-0000000000c1', lineaId: '00000000-0000-4000-8000-0000000000d1',
       rutaId: '00000000-0000-4000-8000-0000000000e1', reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
       sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
-      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16',
+      vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16',
     };
     const filas = [
       { ...base, id: '00000000-0000-4000-8000-000000000001', sesionId: '00000000-0000-4000-8000-0000000000f1', tipo: 'desvio_ruta', gravedad: 'gravisima', estado: 'abierta', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 } },
-      { ...base, id: '00000000-0000-4000-8000-000000000002', sesionId: '00000000-0000-4000-8000-0000000000f2', vehiculoPlaca: '1616PIL', tipo: 'pc_omitido', gravedad: 'leve', estado: 'abierta', inicioTs: new Date().toISOString(), detalle: { puntoControlId: 'x', orden: 6 } },
-      { ...base, id: '00000000-0000-4000-8000-000000000003', sesionId: '00000000-0000-4000-8000-0000000000f3', vehiculoPlaca: '5163NCF', tipo: 'desvio_ruta', gravedad: 'grave', estado: 'atendida', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 } },
+      { ...base, id: '00000000-0000-4000-8000-000000000002', sesionId: '00000000-0000-4000-8000-0000000000f2', vehiculoPlaca: '9002TST', tipo: 'pc_omitido', gravedad: 'leve', estado: 'abierta', inicioTs: new Date().toISOString(), detalle: { puntoControlId: 'x', orden: 6 } },
+      { ...base, id: '00000000-0000-4000-8000-000000000003', sesionId: '00000000-0000-4000-8000-0000000000f3', vehiculoPlaca: '9003TST', tipo: 'desvio_ruta', gravedad: 'grave', estado: 'atendida', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 } },
     ];
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: filas }));
     try {
@@ -908,14 +908,14 @@ test.describe('Panel móvil (Pixel 7)', () => {
         id: id(n), sindicatoId: id(100), vehiculoId: id(200 + n), conductorId: id(300), lineaId: id(400), rutaId: id(500), sesionId: id(600 + n),
         reglaId: null, tipo: 'desvio_ruta', gravedad, estado, inicioTs: new Date(Date.now() - haceMin * 60_000).toISOString(), finTs: null,
         lat: -17.38, lng: -66.3, detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 }, sancionId: null, atendidaPor: null, atendidaEn: null,
-        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: placa, conductorNombre: 'Bravo Soliz Javier', lineaNombre: 'Línea 16',
+        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: placa, conductorNombre: 'Pérez Prueba Ana', lineaNombre: 'Línea 16',
       });
     // Como la API: abiertas primero y la más reciente arriba; la página agrupa por nivel (gravísima, grave, leve).
     const filas = [
       infra(4, '2222AAA', 'leve', 'abierta', 5),
-      infra(3, '4701EHA', 'gravisima', 'abierta', 11),
-      infra(2, '1616PIL', 'grave', 'abierta', 30),
-      infra(1, '5163NCF', 'leve', 'abierta', 52),
+      infra(3, '9001TST', 'gravisima', 'abierta', 11),
+      infra(2, '9002TST', 'grave', 'abierta', 30),
+      infra(1, '9003TST', 'leve', 'abierta', 52),
       infra(5, '3333BBB', 'grave', 'atendida', 3),
     ];
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: filas }));
@@ -931,7 +931,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(page.getByRole('link', { name: /Sanciones pendientes \(3\)/ })).toHaveAttribute('href', '/reglas');
       // Orden: gravísima, grave, leve (más reciente primero dentro del nivel).
       await expect(cards.locator('.qv-alertas-m__sev')).toHaveText(['gravísima', 'grave', 'leve', 'leve']);
-      await expect(cards.locator('.qv-plate__value')).toHaveText(['4701EHA', '1616PIL', '2222AAA', '5163NCF']);
+      await expect(cards.locator('.qv-plate__value')).toHaveText(['9001TST', '9002TST', '2222AAA', '9003TST']);
       await expect(cards.first().locator('.qv-alertas-m__hora')).toContainText('hace 11 min');
       await expect(page.locator('.qv-alertas__titulo')).toHaveCount(4);
       await expect(page.getByRole('heading', { level: 2 })).toHaveCount(0); // lista plana, sin encabezados por gravedad
@@ -984,7 +984,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.getByRole('button', { name: /Abiertas/ }).click();
 
       // Ver en mapa: icono sin texto, mismo destino con vehiculo y sesion.
-      const ver = cards.first().getByRole('link', { name: 'Ver en mapa 4701EHA' });
+      const ver = cards.first().getByRole('link', { name: 'Ver en mapa 9001TST' });
       await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${id(203)}&sesion=${id(603)}`);
       await ver.click();
       await expect(page).toHaveURL(new RegExp(`/en-vivo\\?vehiculo=${id(203)}&sesion=${id(603)}`), { timeout: 30_000 });
@@ -1002,7 +1002,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
         id: id(n), sindicatoId: id(100), vehiculoId: id(200 + n), conductorId: id(300), lineaId: id(400 + n), rutaId: id(500), sesionId: id(600 + n),
         reglaId: null, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date(Date.now() - 5 * 60_000).toISOString(), finTs: null,
         lat: -17.38, lng: -66.3, detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 }, sancionId: null, atendidaPor: null, atendidaEn: null,
-        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: `100${n}AAA`, conductorNombre: 'Bravo Soliz Javier', lineaNombre: linea,
+        nota: null, createdAt: new Date().toISOString(), vehiculoPlaca: `100${n}AAA`, conductorNombre: 'Pérez Prueba Ana', lineaNombre: linea,
       });
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [infra(1, 'Línea 16'), infra(2, 'Línea 120')] }));
     await page.route('**/v1/sanciones*', (r) => r.fulfill({ json: [] }));
@@ -1050,8 +1050,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const alerta = {
       sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
       sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
-      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
-      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '9001TST',
+      conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     };
     let lista: unknown[] = [alerta];
     let retenido: Promise<void> | null = null;
@@ -1073,7 +1073,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       // El refresco queda retenido: la tarjeta sale igual (resultado local) y el foco va al mensaje vacío.
       let soltar!: () => void;
       retenido = new Promise<void>((res) => (soltar = res));
-      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Atender alerta 9001TST' }).click();
       await expect(page.locator('.qv-alertas__vacio')).toBeFocused({ timeout: 5_000 });
       expect(patches).toBe(1);
       lista = [{ ...alerta, estado: 'atendida' }];
@@ -1086,9 +1086,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(page.locator('.qv-alertas__card')).toHaveCount(1);
       status = 409;
       lista = [{ ...alerta, estado: 'atendida' }];
-      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Atender alerta 9001TST' }).click();
       await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
-      const banner = page.getByRole('alert').filter({ hasText: '4701EHA: La infracción ya fue cerrada' });
+      const banner = page.getByRole('alert').filter({ hasText: '9001TST: La infracción ya fue cerrada' });
       await expect(banner).toBeVisible();
       await banner.getByRole('button', { name: 'Cerrar' }).click();
       await expect(banner).toHaveCount(0);
@@ -1104,8 +1104,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const alerta = {
       sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
       sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
-      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
-      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '9001TST',
+      conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     };
     let soltar!: () => void;
     let retenido: Promise<void> | null = null;
@@ -1121,9 +1121,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.getByRole('button', { name: /^Todas/ }).click();
       retenido = new Promise<void>((res) => (soltar = res));
       // Atender y luego descartar antes de que llegue el refresco: el servidor sigue en `abierta`, la superposición debe seguir aplicando.
-      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Atender alerta 9001TST' }).click();
       await expect(page.locator('.qv-alertas__card')).toContainText('Atendida');
-      await page.getByRole('button', { name: 'Descartar alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Descartar alerta 9001TST' }).click();
       await page.getByLabel('Motivo del descarte (opcional)').fill('prueba');
       await page.locator('.qv-alertas__card').getByRole('button', { name: 'Descartar', exact: true }).click();
       // Descartada no se lista: la tarjeta sale en el mismo render (refresco aún retenido) y el foco va al mensaje vacío.
@@ -1144,8 +1144,8 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const alerta = {
       sindicatoId: id, vehiculoId: id, conductorId: id, lineaId: id, rutaId: id, reglaId: null, finTs: null, lat: -17.38, lng: -66.3,
       sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(), id, sesionId: id,
-      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
-      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '9001TST',
+      conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     };
     let soltar!: () => void;
     let retenido: Promise<void> | null = null;
@@ -1162,13 +1162,13 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
       await page.getByRole('button', { name: /^Todas/ }).click();
       const refresco = page.waitForResponse((r) => r.url().includes('/v1/reportes/en-vivo/infracciones') && r.request().method() === 'GET');
-      await page.getByRole('button', { name: 'Atender alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Atender alerta 9001TST' }).click();
       await refresco;
       // Margen para que React Query aplique la respuesta: la caché ya dice `atendida` antes de descartar.
       await page.waitForTimeout(500);
       await expect(page.locator('.qv-alertas__card')).toContainText('Atendida');
       retenido = new Promise<void>((res) => (soltar = res));
-      await page.getByRole('button', { name: 'Descartar alerta 4701EHA' }).click();
+      await page.getByRole('button', { name: 'Descartar alerta 9001TST' }).click();
       await page.getByLabel('Motivo del descarte (opcional)').fill('prueba');
       await page.locator('.qv-alertas__card').getByRole('button', { name: 'Descartar', exact: true }).click();
       await expect(page.locator('.qv-alertas__card')).toHaveCount(0);
@@ -1211,14 +1211,14 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const sesionId = '00000000-0000-4000-8000-0000000000f1';
     const vehiculoId = '00000000-0000-4000-8000-0000000000e1';
     const pos = {
-      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.',
       lineaId: '00000000-0000-4000-8000-0000000000d1', lineaNombre: 'Línea 16', rutaSentido: 'ida',
       lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId,
     };
     await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
     try {
       await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByLabel('Detalle del vehículo 9001TST')).toBeVisible({ timeout: 30_000 });
       await expect(page).toHaveURL(/\/en-vivo$/); // el parámetro se consume
       await expect(page.locator('.qv-chip-mapa--salud')).toContainText('1 de 1');
       const mas = page.getByRole('button', { name: 'Más opciones del mapa' });
@@ -1239,15 +1239,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
     const sesionId = id(1), vehiculoId = id(2), rutaId = id(5), molinos = id(7);
     const pos = {
-      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.',
       lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
       totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 1,
       vuelta: { numero: 2, varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
     };
     const contexto = {
       sesion: { id: sesionId, inicio: new Date().toISOString(), fin: null, estado: 'activa', deviceId: 'd1' },
-      vehiculo: { id: vehiculoId, placa: '4701EHA' },
-      conductor: { id: id(3), nombre: 'Bravo Soliz J.', telefono: '+59171234567' },
+      vehiculo: { id: vehiculoId, placa: '9001TST' },
+      conductor: { id: id(3), nombre: 'Pérez Prueba A.', telefono: '+59171234567' },
       linea: { id: id(4), nombre: 'Línea 16', color: '#7c3aed' },
       ruta: { id: rutaId, geometria: { type: 'LineString', coordinates: [[-66.3, -17.38], [-66.29, -17.37]] } },
       variantes: [], puntosControl: [], puntoEsperaPorVariante: {}, incidencias: [], servidorTs: new Date().toISOString(),
@@ -1257,7 +1257,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       sindicatoId: id(1), vehiculoId, conductorId: id(3), lineaId: id(4), rutaId, reglaId: null, finTs: null,
       lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
       id: id(100 + n), sesionId, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
-      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     });
     let abiertas = [alerta(1)];
     const designaciones: unknown[] = [];
@@ -1274,15 +1274,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
     });
     const abrir = async () => {
       await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByLabel('Detalle del vehículo 9001TST')).toBeVisible({ timeout: 30_000 });
     };
     try {
       await abrir();
-      const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+      const hoja = page.getByLabel('Detalle del vehículo 9001TST');
       // Placa grande del diseño B, línea como etiqueta junto a ella.
-      await expect(hoja.locator('.qv-plate--lg')).toHaveText(/4701EHA/);
+      await expect(hoja.locator('.qv-plate--lg')).toHaveText(/9001TST/);
       await expect(hoja.locator('.qv-live-panel__m-tag')).toHaveText('Línea 16');
-      await expect(hoja.locator('.qv-live-panel__m-conductor')).toHaveText('Bravo Soliz J.');
+      await expect(hoja.locator('.qv-live-panel__m-conductor')).toHaveText('Pérez Prueba A.');
       // Estado con forma + texto; km/h solo reportando (8,6 m/s = 31 km/h).
       await expect(hoja.locator('.qv-live-panel__m-estado')).toContainText(/Reportando\s*· 31 km\/h/);
       // Tarjetas: vuelta y alertas (rojas con alertas abiertas).
@@ -1345,11 +1345,11 @@ test.describe('Panel móvil (Pixel 7)', () => {
       // Cerrar con el botón.
       await abrir();
       await page.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();
-      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toHaveCount(0);
+      await expect(page.getByLabel('Detalle del vehículo 9001TST')).toHaveCount(0);
       // Sin alertas: tarjeta neutra.
       abiertas = [];
       await abrir();
-      const neutra = page.getByLabel('Detalle del vehículo 4701EHA').locator('.qv-live-panel__m-stat').nth(1);
+      const neutra = page.getByLabel('Detalle del vehículo 9001TST').locator('.qv-live-panel__m-stat').nth(1);
       await expect(neutra).toContainText('0 abiertas');
       await expect(neutra).not.toHaveClass(/qv-live-panel__m-stat--al/);
     } finally {
@@ -1362,7 +1362,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
     const sesionId = id(1), vehiculoId = id(2);
     const pos = {
-      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.',
       lineaId: id(4), lineaNombre: 'Línea 120 Expreso Tiquipaya Cercado Norte', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
       totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 0, fotoUrl: 'http://localhost:3130/foto-qa.png',
     };
@@ -1373,7 +1373,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       for (const [w, h] of [[360, 800], [360, 640], [412, 915]] as const) {
         await page.setViewportSize({ width: w, height: h });
         await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-        const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+        const hoja = page.getByLabel('Detalle del vehículo 9001TST');
         await expect(hoja).toBeVisible({ timeout: 30_000 });
         await expect(hoja.locator('.qv-live-panel__m-foto')).toBeVisible();
         const r = await page.evaluate(() => {
@@ -1419,7 +1419,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [{ ...pos, lineaNombre: 'Línea 16', fotoUrl: null }] }));
       await page.setViewportSize({ width: 412, height: 915 });
       await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      await expect(page.getByLabel('Detalle del vehículo 4701EHA')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByLabel('Detalle del vehículo 9001TST')).toBeVisible({ timeout: 30_000 });
       const corta = await page.evaluate(() => {
         const t = document.querySelector('.qv-live-panel__m-tag') as HTMLElement;
         const p = document.querySelector('.qv-live-panel__m-top .qv-plate') as HTMLElement;
@@ -1442,15 +1442,15 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const sesionId = id(1), vehiculoId = id(2), rutaId = id(5), norte = id(7), cerro = id(9);
     const shots = process.env.F16_SHOTS;
     const pos = {
-      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.',
       lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
       totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 1,
       vuelta: { numero: 2, varianteId: norte, varianteNombre: 'Vía Molinos Norte', designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
     };
     const contexto = {
       sesion: { id: sesionId, inicio: new Date().toISOString(), fin: null, estado: 'activa', deviceId: 'd1' },
-      vehiculo: { id: vehiculoId, placa: '4701EHA' },
-      conductor: { id: id(3), nombre: 'Bravo Soliz J.', telefono: '+59171234567' },
+      vehiculo: { id: vehiculoId, placa: '9001TST' },
+      conductor: { id: id(3), nombre: 'Pérez Prueba A.', telefono: '+59171234567' },
       linea: { id: id(4), nombre: 'Línea 16', color: '#7c3aed' },
       ruta: { id: rutaId, geometria: { type: 'LineString', coordinates: [[-66.3, -17.38], [-66.29, -17.37]] } },
       variantes: [], puntosControl: [], puntoEsperaPorVariante: {}, incidencias: [], servidorTs: new Date().toISOString(),
@@ -1463,7 +1463,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       sindicatoId: id(1), vehiculoId, conductorId: id(3), lineaId: id(4), rutaId, reglaId: null, finTs: null,
       lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
       id: id(101), sesionId, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
-      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     };
     const urlInfSesion = `**/v1/reportes/en-vivo/${sesionId}/infracciones*`;
     const urls = ['**/v1/reportes/en-vivo/posiciones*', `**/v1/reportes/en-vivo/${sesionId}/contexto`, `**/v1/rutas/${rutaId}/variantes`, `**/v1/rutas/${rutaId}/puntos-control`, '**/v1/reportes/en-vivo/infracciones*', '**/v1/infracciones*', urlInfSesion];
@@ -1476,7 +1476,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const abrir = async (w: number, h: number) => {
       await page.setViewportSize({ width: w, height: h });
       await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+      const hoja = page.getByLabel('Detalle del vehículo 9001TST');
       await expect(hoja).toBeVisible({ timeout: 30_000 });
       return hoja;
     };
@@ -1508,7 +1508,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
 
       // 412x915: el título es la placa pelada, "Hoy" lleva la variante y la plegada conserva el diseño B.
       hoja = await abrir(412, 915);
-      await expect(hoja.getByRole('heading', { name: '4701EHA', exact: true, level: 2 })).toHaveCount(1);
+      await expect(hoja.getByRole('heading', { name: '9001TST', exact: true, level: 2 })).toHaveCount(1);
       await expect(hoja.locator('.qv-live-panel__m-stat').nth(0)).toContainText('Vuelta 2 · Vía Molinos Norte');
       // Con la variante larga ninguna tarjeta se sale de la hoja (la de alertas no se recorta).
       const hojaCaja = (await hoja.boundingBox())!;
@@ -1577,7 +1577,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     test.setTimeout(90_000);
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
     const pos = {
-      id: id(1), deviceId: 'd1', activa: true, vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaId: id(4), lineaNombre: 'Línea 16',
+      id: id(1), deviceId: 'd1', activa: true, vehiculoPlaca: '9002TST', conductorNombre: 'X', lineaId: id(4), lineaNombre: 'Línea 16',
       rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando',
       vehiculoId: id(2), infraccionesAbiertas: 0,
     };
@@ -1586,7 +1586,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       sindicatoId: id(1), vehiculoId: id(2), conductorId: id(3), lineaId: id(4), rutaId: id(5), reglaId: null, finTs: null,
       lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
       id: id(100 + n), sesionId: id(200 + n), tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
-      vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      vehiculoPlaca: '9002TST', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     });
     await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [alerta(1), alerta(2), alerta(3)] }));
@@ -1618,7 +1618,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     const sesionId = '00000000-0000-4000-8000-0000000000f1';
     const vehiculoId = '00000000-0000-4000-8000-0000000000e1';
     const pos = {
-      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Pérez Prueba A.',
       lineaId: '00000000-0000-4000-8000-0000000000d1', lineaNombre: 'Línea 16', rutaSentido: 'ida',
       lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando',
       vehiculoId,
@@ -1629,17 +1629,17 @@ test.describe('Panel móvil (Pixel 7)', () => {
       sindicatoId: sesionId, vehiculoId, conductorId: sesionId, lineaId: sesionId, rutaId: sesionId, reglaId: null,
       finTs: null, lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null,
       createdAt: new Date().toISOString(), id: '00000000-0000-4000-8000-000000000001', sesionId: sesionAlerta, tipo: 'desvio_ruta',
-      gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '4701EHA',
-      conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+      gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(), vehiculoPlaca: '9001TST',
+      conductorNombre: 'Pérez Prueba A.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
     };
     await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
     await page.route('**/v1/reportes/en-vivo/infracciones*', (r) => r.fulfill({ json: [alerta] }));
     try {
       await page.goto('/alertas', { waitUntil: 'networkidle', timeout: 60_000 });
-      const ver = page.getByRole('link', { name: 'Ver en mapa 4701EHA' });
+      const ver = page.getByRole('link', { name: 'Ver en mapa 9001TST' });
       await expect(ver).toHaveAttribute('href', `/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionAlerta}`);
       await ver.click();
-      const panel = page.getByLabel('Detalle del vehículo 4701EHA');
+      const panel = page.getByLabel('Detalle del vehículo 9001TST');
       await expect(panel).toBeVisible({ timeout: 30_000 });
       // La alerta es de otra sesión que la ganadora: se avisa.
       await expect(page.getByText('Esa alerta es de otra sesión de este vehículo; no aparece en este panel')).toBeVisible();
@@ -1672,7 +1672,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     // Posición completa (forma de `PosicionEnVivoSchema`) del vehículo buscado: alimenta la línea de estado de la tarjeta.
     const ahora = new Date().toISOString();
     const posBuscada = PosicionEnVivoSchema.parse({
-      id: id(300), deviceId: 'dev-1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'José Bravo',
+      id: id(300), deviceId: 'dev-1', activa: true, vehiculoPlaca: '9001TST', conductorNombre: 'Ana Prueba',
       lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 8, speed: 6.5, totalPuntos: 40,
       vehiculoId: id(7), conductorId: id(9),
       vuelta: { numero: 2, varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
@@ -1689,9 +1689,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       ['**/v1/reportes/en-vivo/posiciones*', [pos(1, 'reportando'), pos(2, 'detenido'), pos(3, 'finalizado'), pos(4, 'inactivo'), pos(5, 'inactivo'), posBuscada]],
       ['**/v1/reportes/en-vivo/infracciones*', [infra(1, 'grave', 'abierta'), infra(2, 'leve', 'abierta'), infra(3, 'leve', 'abierta'), infra(4, 'grave', 'atendida')]],
       ['**/v1/sanciones*', [{ id: id(1) }, { id: id(2) }, { id: id(3) }, { id: id(4) }]],
-      ['**/v1/reportes/jornadas*', { fecha: '2026-11-05', vehiculos: [{ vehiculoId: id(7), placa: '4701EHA', conductorId: id(9), conductorNombre: 'José Bravo', lineaNombre: 'Línea 16', estado: 'en_recorrido' }] }],
-      ['**/v1/vehiculos*', [{ id: id(7), placa: '4701EHA' }, { id: id(8), placa: '1616PIL' }]],
-      ['**/v1/conductores*', [{ id: id(9), nombre: 'José Bravo', telefono: '71234567', estado: 'activo' }]],
+      ['**/v1/reportes/jornadas*', { fecha: '2026-11-05', vehiculos: [{ vehiculoId: id(7), placa: '9001TST', conductorId: id(9), conductorNombre: 'Ana Prueba', lineaNombre: 'Línea 16', estado: 'en_recorrido' }] }],
+      ['**/v1/vehiculos*', [{ id: id(7), placa: '9001TST' }, { id: id(8), placa: '9002TST' }]],
+      ['**/v1/conductores*', [{ id: id(9), nombre: 'Ana Prueba', telefono: '71234567', estado: 'activo' }]],
     ];
     for (const [patron, json] of rutas) await page.route(patron, (r) => r.fulfill({ json }));
     try {
@@ -1718,22 +1718,22 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(page.locator('.qv-live-pill')).toContainText('En vivo');
       await expect(page.getByRole('navigation', { name: 'Pestañas', exact: true }).locator('.qv-tabbar__badge')).toHaveText('3');
 
-      await page.getByLabel('Buscar placa o conductor').fill('4701 eh');
+      await page.getByLabel('Buscar placa o conductor').fill('9001 ts');
       const resultado = page.locator('.qv-hoy__resultado');
       await expect(resultado).toHaveCount(1);
-      await expect(page.getByRole('status').filter({ hasText: '1 resultado' })).toContainText('“4701 eh”');
-      await expect(resultado.locator('.qv-plate')).toContainText('4701EHA');
+      await expect(page.getByRole('status').filter({ hasText: '1 resultado' })).toContainText('“9001 ts”');
+      await expect(resultado.locator('.qv-plate')).toContainText('9001TST');
       await expect(resultado.locator('.qv-hoy__tag')).toHaveText('Línea 16');
-      await expect(resultado.locator('.qv-hoy__resultado-nombre')).toHaveText('José Bravo');
+      await expect(resultado.locator('.qv-hoy__resultado-nombre')).toHaveText('Ana Prueba');
       await expect(resultado.locator('.qv-hoy__resultado-estado')).toHaveText(/Reportando\s*· 23 km\/h\s*· vuelta 2/);
       await expect(resultado.locator('.qv-hoy__resultado-meta')).toContainText(/hace \d+ s/);
-      await expect(resultado.getByRole('link', { name: 'Llamar a José Bravo' })).toHaveAttribute('href', 'tel:+59171234567');
-      await expect(resultado.getByRole('link', { name: /^WhatsApp a José Bravo/ })).toHaveAttribute('href', 'https://wa.me/59171234567');
+      await expect(resultado.getByRole('link', { name: 'Llamar a Ana Prueba' })).toHaveAttribute('href', 'tel:+59171234567');
+      await expect(resultado.getByRole('link', { name: /^WhatsApp a Ana Prueba/ })).toHaveAttribute('href', 'https://wa.me/59171234567');
       for (const btn of await resultado.locator('a').all()) expect((await btn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
       // Un vehículo sin conductor de hoy no muestra botones de contacto.
-      await page.getByLabel('Buscar placa o conductor').fill('1616');
+      await page.getByLabel('Buscar placa o conductor').fill('9002');
       await expect(resultado).toHaveCount(1);
       await expect(resultado.getByRole('link')).toHaveCount(0);
       // Sin posición hoy: ni línea de estado ni meta, solo el aviso neutro.
@@ -1869,16 +1869,16 @@ test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)
     id: id(n), sindicatoId: id(1), codigo, nombre: nombreCorto, nombreCorto, color: '#7c3aed',
   });
   const vehiculo = (n: number, lineaId: string, placa: string, estadoFrescura: string) => ({
-    id: id(300 + n), deviceId: `d${n}`, activa: true, vehiculoPlaca: placa, conductorNombre: 'Bravo Soliz J.', lineaId, lineaNombre: 'X',
+    id: id(300 + n), deviceId: `d${n}`, activa: true, vehiculoPlaca: placa, conductorNombre: 'Pérez Prueba A.', lineaId, lineaNombre: 'X',
     rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura, vehiculoId: id(400 + n), infraccionesAbiertas: 0,
   });
-  const posiciones = [vehiculo(1, id(11), '1616PIL', 'reportando'), vehiculo(2, id(12), '4701EHA', 'finalizado')];
+  const posiciones = [vehiculo(1, id(11), '9002TST', 'reportando'), vehiculo(2, id(12), '9001TST', 'finalizado')];
 
   const alerta = (n: number, gravedad = 'grave') => ({
     sindicatoId: id(1), vehiculoId: id(400 + n), conductorId: id(3), lineaId: id(11), rutaId: id(5), reglaId: null, finTs: null,
     lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
     id: id(500 + n), sesionId: id(300 + n), tipo: 'desvio_ruta', gravedad, estado: 'abierta', inicioTs: new Date().toISOString(),
-    vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    vehiculoPlaca: '9002TST', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
   });
   type Pos = ReturnType<typeof vehiculo> & { infraccionNivel?: string | null; infraccionesAbiertas?: number };
   const conAlerta = (v: Pos, nivel: string, abiertas = 1): Pos => ({ ...v, infraccionNivel: nivel, infraccionesAbiertas: abiertas });
@@ -2020,7 +2020,7 @@ test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)
     await context.close();
   });
 
-  const conAlertas = () => [conAlerta(vehiculo(1, id(11), '1616PIL', 'reportando'), 'grave', 2), conAlerta(vehiculo(2, id(11), '4701EHA', 'reportando'), 'leve')];
+  const conAlertas = () => [conAlerta(vehiculo(1, id(11), '9002TST', 'reportando'), 'grave', 2), conAlerta(vehiculo(2, id(11), '9001TST', 'reportando'), 'leve')];
 
   test('alertas en el menú ⋯ (admin): Siguiente alerta, filtro por nivel y su estado en el disparador; sin insignia', async ({ browser }, testInfo) => {
     const { context, p } = await abrir(browser, testInfo.project.use.baseURL, 'admin_quivo', '/en-vivo', {
@@ -2083,7 +2083,7 @@ test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)
     // Siguiente alerta: abre el vehículo de la alerta más grave y, al cerrarlo, el foco vuelve al ⋯ (no hay botón en la barra).
     await mas.click();
     await p.getByRole('menuitem', { name: 'Siguiente alerta' }).click();
-    await expect(p.getByLabel('Detalle del vehículo 1616PIL')).toBeVisible({ timeout: 30_000 });
+    await expect(p.getByLabel('Detalle del vehículo 9002TST')).toBeVisible({ timeout: 30_000 });
     await p.getByRole('button', { name: 'Cerrar detalle del vehículo' }).click();
     await expect(p.getByLabel(/Detalle del vehículo/)).toHaveCount(0);
     await expect(mas).toBeFocused();
@@ -2116,16 +2116,16 @@ test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)
     await mas.click();
     await expect(p.getByRole('menuitemcheckbox', { name: '1 leve' })).toHaveAttribute('aria-checked', 'true');
     await p.getByRole('menuitem', { name: 'Siguiente alerta' }).click();
-    await expect(p.getByLabel(/Detalle del vehículo 4701EHA/)).toBeVisible({ timeout: 30_000 }); // con el filtro, la única alerta alcanzable es la leve
+    await expect(p.getByLabel(/Detalle del vehículo 9001TST/)).toBeVisible({ timeout: 30_000 }); // con el filtro, la única alerta alcanzable es la leve
     await context.close();
   });
 
   test('el menú ⋯ abierto queda por encima de la hoja del vehículo y se puede tocar', async ({ browser }, testInfo) => {
-    const veh = vehiculo(1, id(11), '1616PIL', 'reportando');
+    const veh = vehiculo(1, id(11), '9002TST', 'reportando');
     const { context, p } = await abrir(browser, testInfo.project.use.baseURL, 'admin_quivo', `/en-vivo?vehiculo=${veh.vehiculoId}&sesion=${veh.id}`, {
       viewport: { width: 412, height: 700 }, posiciones: conAlertas, infracciones: [alerta(1)], esperar: '2 de 2',
     });
-    const hoja = p.getByLabel('Detalle del vehículo 1616PIL');
+    const hoja = p.getByLabel('Detalle del vehículo 9002TST');
     await expect(hoja).toBeVisible({ timeout: 30_000 });
     const mas = p.getByRole('button', { name: /Más opciones del mapa/ });
     await mas.click();
@@ -2237,7 +2237,7 @@ test.describe('En vivo móvil: selector de línea y menú ⋯ (sesión simulada)
 test.describe('En vivo a 900 px: barra de mando (sesión simulada)', () => {
   const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
   const pos = {
-    id: id(1), deviceId: 'd1', activa: true, vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaId: id(4), lineaNombre: 'Línea 16',
+    id: id(1), deviceId: 'd1', activa: true, vehiculoPlaca: '9002TST', conductorNombre: 'X', lineaId: id(4), lineaNombre: 'Línea 16',
     rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 20, totalPuntos: 10, estadoFrescura: 'reportando',
     vehiculoId: id(2), infraccionesAbiertas: 0,
   };
@@ -2246,7 +2246,7 @@ test.describe('En vivo a 900 px: barra de mando (sesión simulada)', () => {
     sindicatoId: id(1), vehiculoId: id(2), conductorId: id(3), lineaId: id(4), rutaId: id(5), reglaId: null, finTs: null,
     lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
     id: id(100 + n), sesionId: id(200 + n), tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
-    vehiculoPlaca: '1616PIL', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    vehiculoPlaca: '9002TST', conductorNombre: 'X', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
   });
 
   test('barra de mando: sin chips, h1 propio; Flota abre, Escape cierra y devuelve el foco; vacío la deshabilita', async ({ browser }, testInfo) => {
