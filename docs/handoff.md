@@ -121,11 +121,13 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
     - "Ver en mapa" como ícono.
     - Sanciones pendientes con conteo, que se invalida al sancionar. Escritorio no consulta `/sanciones`.
     - La línea aparece si hay más de una.
-  - **PR 6 (Salidas):** este PR.
+  - **PR 6, #319, mergeado (`8e5a49c`).**
     - Fila de tarjetas con Despachar a todo el ancho y menú ⋯ para el resto.
     - Recientes, frecuencia base arriba y título con la terminal.
     - El Despachar de escritorio comparte `pedir` y se verificó que se comporta igual.
-  - **PR 7 (Más), PR 8 (En vivo con chips y menú ⋯) y PR 9 (marcadores píldora):** commits locales apilados, esperando el rebase.
+    - Chofer desde posiciones en vivo: el operador también lo ve. Un trufi en fila sin sesión activa no muestra chofer; la solución de fondo es `conductorNombre` en el API de la fila.
+  - **PR 7 (Más):** este PR. Página propia en el celular, reemplaza al drawer.
+  - **PR 8 (En vivo con chips y menú ⋯) y PR 9 (marcadores píldora):** commits locales apilados, esperando el rebase.
     - PR 9: color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
     - La key de Google Maps no funciona en localhost: los marcadores solo se verificaron en un harness aislado, no sobre el mapa real.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.
