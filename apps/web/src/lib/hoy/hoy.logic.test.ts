@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Conductor, JornadaVehiculo, Vehiculo } from '@quivo/shared';
-import { buscarHoy, fechaHoy, normalizarBusqueda } from './hoy.logic';
+import type { Conductor, JornadaVehiculo, PosicionEnVivo, Vehiculo } from '@quivo/shared';
+import { buscarHoy, estadoVehiculoHoy, fechaHoy, haceCorto, normalizarBusqueda, posicionDeVehiculo } from './hoy.logic';
 
 const veh = (id: string, placa: string) => ({ id, placa }) as Vehiculo;
 const cond = (id: string, nombre: string, telefono: string | null) => ({ id, nombre, telefono }) as Conductor;
@@ -60,5 +60,44 @@ describe('fechaHoy', () => {
     const r = fechaHoy(new Date('2026-11-06T02:30:00Z'));
     expect(r).toBe('Jue 5 nov');
     expect(r).not.toContain('.');
+  });
+});
+
+const posi = (o: Partial<PosicionEnVivo> = {}) =>
+  ({ id: 's', vehiculoId: 'v1', lineaNombre: 'Línea 16', estadoFrescura: 'reportando', speed: 6.4, ultimoFixTs: '2026-11-05T12:00:00.000Z', antiguedadFixMs: 4000, vuelta: { numero: 2 }, ...o }) as PosicionEnVivo;
+
+describe('posicionDeVehiculo', () => {
+  it('une por vehiculoId y con dos sesiones gana el último fix', () => {
+    const a = posi({ id: 'a', ultimoFixTs: '2026-11-05T11:00:00.000Z' });
+    const b = posi({ id: 'b' });
+    expect(posicionDeVehiculo([a, b, posi({ id: 'x', vehiculoId: 'v2' })], 'v1')?.id).toBe('b');
+    expect(posicionDeVehiculo([a], 'v9')).toBeUndefined();
+  });
+});
+
+describe('haceCorto', () => {
+  it('s, min, h y null', () => {
+    expect(haceCorto(4_900)).toBe('hace 4 s');
+    expect(haceCorto(185_000)).toBe('hace 3 min');
+    expect(haceCorto(7_300_000)).toBe('hace 2 h');
+    expect(haceCorto(null)).toBeNull();
+  });
+});
+
+describe('estadoVehiculoHoy', () => {
+  it('reportando: insignia activa, km/h redondeado y vuelta', () => {
+    expect(estadoVehiculoHoy(posi())).toEqual({ insignia: 'active', etiqueta: 'Reportando', kmh: 23, vuelta: 2, linea: 'Línea 16' });
+  });
+  it('sin vuelta, sin velocidad y sin fix', () => {
+    const e = estadoVehiculoHoy(posi({ vuelta: null, speed: null, antiguedadFixMs: null, estadoFrescura: 'perdido' }));
+    expect(e).toMatchObject({ insignia: 'canceled', etiqueta: 'Sin señal', kmh: null, vuelta: null });
+  });
+  it('la velocidad solo se muestra si el vehículo reporta', () => {
+    for (const estadoFrescura of ['perdido', 'en_pausa', 'finalizado', 'detenido'] as const) {
+      expect(estadoVehiculoHoy(posi({ estadoFrescura, speed: 9 })).kmh).toBeNull();
+    }
+  });
+  it('estado desconocido cae a sin datos (neutro)', () => {
+    expect(estadoVehiculoHoy(posi({ estadoFrescura: 'raro' as never }))).toMatchObject({ insignia: 'inactive', etiqueta: 'Sin datos' });
   });
 });

@@ -1,4 +1,15 @@
-import { normalizarPlacaVehiculo, type Conductor, type JornadaVehiculo, type Vehiculo } from '@quivo/shared';
+import {
+  normalizarPlacaVehiculo,
+  type Conductor,
+  type EstadoFrescura,
+  type JornadaVehiculo,
+  type PosicionEnVivo,
+  type Vehiculo,
+} from '@quivo/shared';
+import type { StatusBadgeStatus } from '@quivo/design-system';
+import { estadoDe } from '../en-vivo/atencion';
+import { velocidadKmh } from '../en-vivo/alertas';
+import { presentacionFrescura } from '../en-vivo/traza';
 
 /** Lógica pura de la vista "Hoy" del celular: búsqueda unificada de placa o conductor. */
 
@@ -8,6 +19,9 @@ export interface ResultadoHoy {
   /** Placa (vehículo) o nombre (conductor). */
   titulo: string;
   detalle: string;
+  /** Vehículo: conductor y línea de hoy según la jornada (`null` = sin turno). */
+  conductorNombre?: string | null;
+  lineaNombre?: string | null;
   /** Teléfono crudo del conductor (vehículo: el de su conductor de hoy); `null` = sin botones. */
   telefono: string | null;
 }
@@ -46,6 +60,8 @@ export function buscarHoy(
       id: v.id,
       titulo: v.placa,
       detalle: j ? `${j.lineaNombre}${j.conductorNombre ? ` · ${j.conductorNombre}` : ''}` : 'Sin turno hoy',
+      conductorNombre: j?.conductorNombre ?? null,
+      lineaNombre: j?.lineaNombre ?? null,
       telefono: (j?.conductorId && conductorDe.get(j.conductorId)?.telefono) || null,
     });
   }
@@ -72,4 +88,54 @@ export function fechaHoy(ahora: Date = new Date()): string {
       .map((x) => [x.type, x.value.replaceAll('.', '')]),
   );
   return `${p.weekday!.charAt(0).toUpperCase()}${p.weekday!.slice(1)} ${p.day} ${p.month}`;
+}
+
+/** Forma del `StatusBadge` por estado: círculo ok, rombo aviso, cuadrado falla, hueco neutro. */
+const INSIGNIA: Record<EstadoFrescura, StatusBadgeStatus> = {
+  reportando: 'active',
+  detenido: 'idle',
+  en_pausa: 'warning',
+  perdido: 'canceled',
+  finalizado: 'inactive',
+  inactivo: 'inactive',
+  sin_datos: 'inactive',
+};
+
+/** Sesión de hoy del vehículo; con varias (dos teléfonos) gana la del último fix. */
+export function posicionDeVehiculo(posiciones: readonly PosicionEnVivo[], vehiculoId: string): PosicionEnVivo | undefined {
+  let mejor: PosicionEnVivo | undefined;
+  for (const p of posiciones) {
+    if (p.vehiculoId !== vehiculoId) continue;
+    if (!mejor || (p.ultimoFixTs ?? '') > (mejor.ultimoFixTs ?? '')) mejor = p;
+  }
+  return mejor;
+}
+
+/** "hace 4 s" / "hace 3 min" / "hace 2 h"; `null` si no hay fix. */
+export function haceCorto(ms: number | null): string | null {
+  if (ms === null) return null;
+  const s = Math.floor(Math.max(0, ms) / 1000);
+  if (s < 60) return `hace ${s} s`;
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  return `hace ${Math.floor(s / 3600)} h`;
+}
+
+export interface EstadoVehiculoHoy {
+  insignia: StatusBadgeStatus;
+  etiqueta: string;
+  kmh: number | null;
+  vuelta: number | null;
+  linea: string;
+}
+
+/** Datos de la tarjeta de resultado. La velocidad solo se muestra en vivo: un vehículo perdido/pausado/finalizado no lleva cifra. */
+export function estadoVehiculoHoy(p: PosicionEnVivo): EstadoVehiculoHoy {
+  const estado = estadoDe(p);
+  return {
+    insignia: INSIGNIA[estado],
+    etiqueta: presentacionFrescura(estado).etiqueta,
+    kmh: estado === 'reportando' ? velocidadKmh(p.speed) : null,
+    vuelta: p.vuelta?.numero ?? null,
+    linea: p.lineaNombre,
+  };
 }

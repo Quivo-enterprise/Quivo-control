@@ -31,6 +31,10 @@
   --qv-color-success: #16a34a;
   --qv-color-warning: #d97706;
   --qv-color-warning-soft: #fef3c7;
+  --qv-color-warning-texto: #92400e;
+  --qv-color-danger-soft: #fee2e2;
+  --qv-color-danger-texto: #b91c1c;
+  --qv-color-whatsapp: #15803d;
   --qv-color-success-soft: #dcfce7;
   --qv-color-info: #0891b2;
   --qv-color-border: #d8dde6;
@@ -124,6 +128,10 @@
     --qv-color-success: #4ade80;
     --qv-color-warning: #fbbf24;
     --qv-color-warning-soft: #451a03;
+    --qv-color-warning-texto: #fcd34d;
+    --qv-color-danger-soft: #3b1618;
+    --qv-color-danger-texto: #fca5a5;
+    --qv-color-whatsapp: #22a55b;
     --qv-color-success-soft: #123222;
     --qv-color-info: #22d3ee;
     --qv-color-border: #2a3342;
