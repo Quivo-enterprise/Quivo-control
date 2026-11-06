@@ -29,6 +29,10 @@ export interface MobileTab {
   href: string;
   icon: ReactNode;
   active?: boolean;
+  /** Contador sobre el icono (p. ej. alertas abiertas); oculto con 0 o sin valor. */
+  badge?: number;
+  /** Texto para lectores de pantalla del contador (el número solo no dice qué cuenta). */
+  badgeLabel?: string;
   onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
 }
 
@@ -54,6 +58,12 @@ export function MobileTabBar({ tabs, drawerId, moreOpen, onMore, moreRef }: Mobi
         >
           <span className="qv-tabbar__pill" aria-hidden="true">{tab.icon}</span>
           {tab.label}
+          {tab.badge ? (
+            <>
+              <span className="qv-tabbar__badge" aria-hidden="true">{tab.badge}</span>
+              {tab.badgeLabel && <span className="qv-visually-hidden">{tab.badgeLabel}</span>}
+            </>
+          ) : null}
         </a>
       ))}
       <button

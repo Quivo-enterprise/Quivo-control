@@ -34,10 +34,14 @@ import {
 import { BrandLogo } from '../../src/components/brand-logo';
 import { RequireAuth } from '../../src/components/require-auth';
 import { useAuth } from '../../src/lib/auth/auth-context';
-import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
+import { filterNavItemsByRole, groupNavItemsBySection, isNavActive, isRouteAllowedForRole, MOBILE_TAB_ITEMS, NAV_ITEMS } from '../../src/lib/nav-items';
+import { textoAlertasAbiertas } from '../../src/lib/en-vivo/alertas';
+import { useInfraccionesHoy } from '../../src/lib/en-vivo/use-en-vivo';
+import { useEsMovil } from '../../src/lib/use-es-movil';
 
 function getNavIcon(iconName?: string, size = 18) {
-  const strokeWidth = 1.9;
+  // 24 = icono de la tabbar (comp: trazo 2); la sidebar de escritorio conserva 1.9.
+  const strokeWidth = size === 24 ? 2 : 1.9;
   switch (iconName) {
     case 'House':
       return <House size={size} strokeWidth={strokeWidth} />;
@@ -79,7 +83,12 @@ function getNavIcon(iconName?: string, size = 18) {
 }
 
 function DashboardShell({ children }: { children: ReactNode }) {
-  const { user, logout, isDevBypass, switchDevBypassRole } = useAuth();
+  const { user, token, logout, isDevBypass, switchDevBypassRole } = useAuth();
+  const esMovil = useEsMovil();
+  // Mismo query key que Hoy y Alertas (caché compartida); sin token no consulta: ni en escritorio ni sin permiso a /alertas.
+  const puedeAlertas = isRouteAllowedForRole(NAV_ITEMS, '/alertas', user?.rol ?? '');
+  const alertasHoy = useInfraccionesHoy(esMovil && puedeAlertas ? token : null);
+  const abiertas = alertasHoy.data?.filter((i) => i.estado === 'abierta').length ?? 0;
   const pathname = usePathname();
   const router = useRouter();
   const isLive = pathname === '/en-vivo';
@@ -157,6 +166,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
     href: item.href,
     icon: getNavIcon(item.iconName, 24),
     active: isNavActive(pathname, item.href),
+    ...(item.id === 'alertas' && { badge: abiertas, badgeLabel: textoAlertasAbiertas(abiertas) }),
     onClick: (event) => {
       // Solo clic izquierdo simple: Ctrl/Cmd/Shift/Alt y clic medio conservan el comportamiento del navegador.
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;

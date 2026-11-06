@@ -13,6 +13,7 @@ import { vehiculosApi } from '../../src/lib/api/vehiculos';
 import { conteoPorEstado, resumenFlota } from '../../src/lib/en-vivo/atencion';
 import { horaBo, telefonoParaWhatsapp, textoAlertasAbiertas, urlLlamada } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy, useJornadasHoy, usePosicionesEnVivo } from '../../src/lib/en-vivo/use-en-vivo';
+import { useSaludRefresco } from '../../src/lib/en-vivo/use-salud-refresco';
 import { BUSQUEDA_MIN, buscarHoy, normalizarBusqueda } from '../../src/lib/hoy/hoy.logic';
 import { mensajeError } from './en-vivo/map-builders';
 
@@ -50,6 +51,37 @@ function TarjetaKpi({ kpi }: { kpi: Kpi }) {
   ) : (
     <div className="qv-hoy__kpi">{cuerpo}</div>
   );
+}
+
+const INTERVALO_HOY_MS = 15_000;
+
+const PILDORA: Record<'ok' | 'lento' | 'sin_conexion', { texto: string; clase: string }> = {
+  ok: { texto: 'En vivo', clase: '' },
+  lento: { texto: 'Lento', clase: ' qv-live-pill--lento' },
+  sin_conexion: { texto: 'Sin conexión', clase: ' qv-live-pill--off' },
+};
+
+/** Hoja: el tick de 1 Hz de `useSaludRefresco` re-renderiza solo la píldora. Sin primer dato no muestra nada. */
+function PildoraEnVivo({ consulta }: { consulta: { dataUpdatedAt: number; isError: boolean } }) {
+  const salud = useSaludRefresco(consulta, INTERVALO_HOY_MS);
+  if (!consulta.dataUpdatedAt && !consulta.isError) return null;
+  const { texto, clase } = PILDORA[salud.estado];
+  return (
+    <span className={`qv-live-pill${clase}`} role="status">
+      <span className="qv-live-pill__dot" aria-hidden="true" />
+      {texto}
+    </span>
+  );
+}
+
+/** "Mié 5 nov" en hora de La Paz (el servidor y el celular pueden estar en otra zona). */
+function fechaHoy(ahora: Date = new Date()): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('es-BO', { timeZone: 'America/La_Paz', weekday: 'short', day: 'numeric', month: 'short' })
+      .formatToParts(ahora)
+      .map((x) => [x.type, x.value.replace('.', '')]),
+  );
+  return `${p.weekday!.charAt(0).toUpperCase()}${p.weekday!.slice(1)} ${p.day} ${p.month}`;
 }
 
 export function HoyMovil() {
@@ -149,7 +181,8 @@ export function HoyMovil() {
 
   return (
     <div className="qv-hoy">
-      <PageHeader title="Hoy" subtitle="Resumen del día y consultas rápidas" />
+      {/* El nombre del sindicato no viaja en `useAuth().user` (solo `sindicatoId`): el subtítulo lleva solo la fecha. */}
+      <PageHeader title="Hoy" subtitle={fechaHoy()} actions={<PildoraEnVivo consulta={posiciones} />} />
 
       <p className="qv-visually-hidden" aria-live="polite">
         {abiertas ? textoAlertasAbiertas(abiertas.length) : ''}
