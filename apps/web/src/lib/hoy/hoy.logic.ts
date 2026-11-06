@@ -139,7 +139,7 @@ export function estadoVehiculoHoy(p: PosicionEnVivo): EstadoVehiculoHoy {
   return {
     insignia: INSIGNIA[estado],
     etiqueta: presentacionFrescura(estado).etiqueta,
-    kmh: estado === 'reportando' ? velocidadKmh(p.speed) : null,
+    kmh: kmhSiReportando(estado, velocidadKmh(p.speed)),
     vuelta: p.vuelta?.numero ?? null,
     linea: p.lineaNombre,
   };

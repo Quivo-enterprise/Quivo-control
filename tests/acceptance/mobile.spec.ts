@@ -1432,6 +1432,142 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
+  test('En vivo: hoja honesta al cargar, plegada corta en pantallas bajas, segmentos sin cortar y título accesible', async () => {
+    test.setTimeout(150_000);
+    const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
+    const sesionId = id(1), vehiculoId = id(2), rutaId = id(5), norte = id(7), cerro = id(9);
+    const shots = process.env.F16_SHOTS;
+    const pos = {
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
+      totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 1,
+      vuelta: { numero: 2, varianteId: norte, varianteNombre: 'Vía Molinos Norte', designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
+    };
+    const contexto = {
+      sesion: { id: sesionId, inicio: new Date().toISOString(), fin: null, estado: 'activa', deviceId: 'd1' },
+      vehiculo: { id: vehiculoId, placa: '4701EHA' },
+      conductor: { id: id(3), nombre: 'Bravo Soliz J.', telefono: '+59171234567' },
+      linea: { id: id(4), nombre: 'Línea 16', color: '#7c3aed' },
+      ruta: { id: rutaId, geometria: { type: 'LineString', coordinates: [[-66.3, -17.38], [-66.29, -17.37]] } },
+      variantes: [], puntosControl: [], puntoEsperaPorVariante: {}, incidencias: [], servidorTs: new Date().toISOString(),
+    };
+    const variantes = [
+      { id: norte, rutaId, nombre: 'Vía Molinos Norte', estado: 'activo', puntoEsperaId: id(8), geometria: null },
+      { id: cerro, rutaId, nombre: 'Cerro', estado: 'activo', puntoEsperaId: id(8), geometria: null },
+    ];
+    const alerta = {
+      sindicatoId: id(1), vehiculoId, conductorId: id(3), lineaId: id(4), rutaId, reglaId: null, finTs: null,
+      lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
+      id: id(101), sesionId, tipo: 'desvio_ruta', gravedad: 'grave', estado: 'abierta', inicioTs: new Date().toISOString(),
+      vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.', lineaNombre: 'Línea 16', detalle: { distanciaMaxM: 150, duracionS: 60, puntos: 4 },
+    };
+    const urlInfSesion = `**/v1/reportes/en-vivo/${sesionId}/infracciones*`;
+    const urls = ['**/v1/reportes/en-vivo/posiciones*', `**/v1/reportes/en-vivo/${sesionId}/contexto`, `**/v1/rutas/${rutaId}/variantes`, `**/v1/rutas/${rutaId}/puntos-control`, '**/v1/reportes/en-vivo/infracciones*', '**/v1/infracciones*', urlInfSesion];
+    await page.route(urls[0]!, (r) => r.fulfill({ json: [pos] }));
+    await page.route(urls[1]!, (r) => r.fulfill({ json: contexto }));
+    await page.route(urls[2]!, (r) => r.fulfill({ json: variantes }));
+    await page.route(urls[3]!, (r) => r.fulfill({ json: [] }));
+    await page.route(urls[4]!, (r) => r.fulfill({ json: [alerta] }));
+    await page.route(urls[5]!, (r) => r.fulfill({ json: [alerta] }));
+    const abrir = async (w: number, h: number) => {
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+      await expect(hoja).toBeVisible({ timeout: 30_000 });
+      return hoja;
+    };
+    try {
+      // Cargando: la tarjeta de alertas no afirma "0 abiertas".
+      let liberar!: () => void;
+      const gate = new Promise<void>((res) => { liberar = res; });
+      await page.route(urlInfSesion, async (r) => { await gate; await r.fulfill({ json: [alerta] }); });
+      let hoja = await abrir(412, 915);
+      const tarjetaAlertas = hoja.locator('.qv-live-panel__m-stat').nth(1);
+      await expect(tarjetaAlertas).toContainText('Cargando…');
+      await expect(tarjetaAlertas).not.toContainText('0 abierta');
+      await expect(tarjetaAlertas).not.toHaveClass(/qv-live-panel__m-stat--al/);
+      if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja_cargando.png` });
+      liberar();
+      await expect(tarjetaAlertas).toContainText('1 abierta');
+      await expect(tarjetaAlertas).toHaveClass(/qv-live-panel__m-stat--al/);
+      await page.unroute(urlInfSesion);
+
+      // Error sin datos: "Sin cargar", neutro (no rojo).
+      await page.route(urlInfSesion, (r) => r.fulfill({ status: 500, json: { message: 'boom' } }));
+      hoja = await abrir(412, 915);
+      const tarjetaError = hoja.locator('.qv-live-panel__m-stat').nth(1);
+      await expect(tarjetaError).toContainText('Sin cargar', { timeout: 45_000 });
+      await expect(tarjetaError).not.toContainText('0 abierta');
+      await expect(tarjetaError).not.toHaveClass(/qv-live-panel__m-stat--al/);
+      await page.unroute(urlInfSesion);
+      await page.route(urlInfSesion, (r) => r.fulfill({ json: [alerta] }));
+
+      // 412x915: el título es la placa pelada, "Hoy" lleva la variante y la plegada conserva el diseño B.
+      hoja = await abrir(412, 915);
+      await expect(hoja.getByRole('heading', { name: '4701EHA', exact: true, level: 2 })).toHaveCount(1);
+      await expect(hoja.locator('.qv-live-panel__m-stat').nth(0)).toContainText('Vuelta 2 · Vía Molinos Norte');
+      // Con la variante larga ninguna tarjeta se sale de la hoja (la de alertas no se recorta).
+      const hojaCaja = (await hoja.boundingBox())!;
+      for (const t of await hoja.locator('.qv-live-panel__m-stat').all()) {
+        const c = (await t.boundingBox())!;
+        expect(c.x + c.width, 'tarjeta dentro de la hoja').toBeLessThanOrEqual(hojaCaja.x + hojaCaja.width + 1);
+      }
+      const ctrl = hoja.locator('.qv-live-panel__asa');
+      const controla = (await ctrl.getAttribute('aria-controls'))!.split(/\s+/);
+      expect(controla.length).toBeGreaterThanOrEqual(2);
+      for (const idc of controla) await expect(page.locator(`[id="${idc}"]`)).toHaveCount(1);
+      if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja_expandida.png` });
+      await ctrl.click();
+      await expect(hoja.getByRole('heading', { name: 'Designación' })).toBeVisible();
+      if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja.png` });
+
+      // 360x640: plegada ≤ 45% del alto, mapa ≥ 50%; expandida muestra Designación; segmentos sin cortar palabras.
+      hoja = await abrir(360, 640);
+      await hoja.locator('.qv-live-panel__asa').click();
+      await expect(hoja.getByRole('heading', { name: 'Designación' })).toBeHidden();
+      await expect(hoja.locator('.qv-live-panel__m-stats')).toBeHidden();
+      await expect(hoja.getByRole('link', { name: 'Llamar' })).toBeVisible();
+      await expect(hoja.getByRole('link', { name: 'Ver recorrido' })).toBeVisible();
+      await expect(hoja.locator('.qv-live-panel__m-estado')).toBeVisible();
+      const caja = (await hoja.boundingBox())!;
+      console.log(`hoja 360x640 plegada: ${caja.height}px, mapa libre ${caja.y}px`);
+      expect(caja.height, 'plegada ≤ 45% del alto').toBeLessThanOrEqual(640 * 0.45);
+      expect(caja.y, 'mapa por encima ≥ 50%').toBeGreaterThanOrEqual(640 * 0.5);
+      if (shots) await page.screenshot({ path: `${shots}/b10fix3_hoja_360x640.png` });
+      await hoja.locator('.qv-live-panel__asa').click();
+      await expect(hoja.getByRole('heading', { name: 'Designación' })).toBeVisible();
+      const seg = await hoja.getByRole('radio').evaluateAll((els) =>
+        els.map((el) => {
+          const b = el as HTMLElement;
+          // Sin corte a mitad de palabra: la palabra más ancha cabe en el ancho útil del segmento.
+          const palabras = (b.textContent ?? '').trim().split(/\s+/);
+          const anchoMax = Math.max(...palabras.map((w) => {
+            const t = document.createElement('span');
+            t.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap';
+            t.style.font = getComputedStyle(b).font;
+            t.textContent = w;
+            document.body.appendChild(t);
+            const a = t.getBoundingClientRect().width;
+            t.remove();
+            return a;
+          }));
+          const cs = getComputedStyle(b);
+          const util = b.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          return { texto: b.textContent, sobra: b.scrollWidth - b.clientWidth, palabraMasAncha: anchoMax, util, ancho: b.getBoundingClientRect().width };
+        }),
+      );
+      expect(seg).toHaveLength(3);
+      for (const s of seg) {
+        expect(s.sobra, `segmento "${s.texto}" desborda`).toBeLessThanOrEqual(1);
+        expect(s.palabraMasAncha, `segmento "${s.texto}" corta una palabra`).toBeLessThanOrEqual(s.util + 1);
+        expect(s.ancho).toBeGreaterThanOrEqual(115);
+      }
+    } finally {
+      await page.setViewportSize({ width: 412, height: 915 });
+      for (const u of urls) await page.unroute(u);
+    }
+  });
+
   test('En vivo: sin contadores de alerta sobre el mapa; el admin las ve en la pestaña Alertas y el resumen en el menú ⋯', async () => {
     test.setTimeout(90_000);
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;

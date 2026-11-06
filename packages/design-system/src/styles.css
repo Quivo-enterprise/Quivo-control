@@ -4721,12 +4721,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
 }
 
-/* Hoja de dos alturas: el asa y el resumen solo existen en móvil (ver el @media de abajo). */
+/* Hoja de dos alturas: el asa solo existe en móvil (ver el @media de abajo). */
 .qv-live-panel__cuerpo {
   display: contents;
 }
-.qv-live-panel__asa,
-.qv-live-panel__resumen {
+.qv-live-panel__asa {
   display: none;
 }
 
@@ -4784,21 +4783,13 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     border-radius: 3px;
     background: var(--qv-border-strong, var(--qv-color-border));
   }
-  /* Plegada: solo asa + cabecera + resumen; el mapa queda a la vista. */
+  /* Plegada: solo asa + cabecera del diseño B; el mapa queda a la vista. */
   .qv-live-panel[data-hoja='plegada'] {
     gap: 0.4rem;
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   }
   .qv-live-panel[data-hoja='plegada'] .qv-live-panel__cuerpo {
     display: none;
-  }
-  .qv-live-panel[data-hoja='plegada'] .qv-live-panel__resumen {
-    display: block;
-    margin: 0;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: var(--qv-text-secondary);
-    font-variant-numeric: tabular-nums;
   }
   .qv-live-btn {
     min-height: 2.75rem;
@@ -4907,12 +4898,24 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     font-weight: 500;
     color: var(--qv-text-secondary);
   }
+  /* Estadísticas + designación: en pantallas bajas la hoja plegada las oculta (ver abajo). */
+  .qv-live-panel__m-detalle {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  @media (max-height: 739px) {
+    .qv-live-panel[data-hoja='plegada'] .qv-live-panel__m-detalle {
+      display: none;
+    }
+  }
   .qv-live-panel__m-stats {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
   }
   .qv-live-panel__m-stat {
+    min-width: 0;
     padding: 8px 12px;
     border: 1.5px solid var(--qv-border-subtle);
     border-radius: 14px;
@@ -4927,6 +4930,10 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
   }
   .qv-live-panel__m-stat b {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--qv-font-display);
     font-size: 20px;
     font-weight: 800;
@@ -4954,7 +4961,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-primary);
   }
   .qv-vuelta--movil .qv-vuelta__segmentos {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 0;
     padding: 3px;
     border: 2px solid var(--qv-color-primary-soft);
@@ -4966,7 +4973,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    flex: 1 1 0;
+    flex: 1 1 120px;
     min-height: 46px;
     border-radius: 11px;
     font-size: 16px;
