@@ -39,9 +39,7 @@ import { textoAlertasAbiertas } from '../../src/lib/en-vivo/alertas';
 import { useInfraccionesHoy } from '../../src/lib/en-vivo/use-en-vivo';
 import { useEsMovil } from '../../src/lib/use-es-movil';
 
-function getNavIcon(iconName?: string, size = 18) {
-  // 24 = icono de la tabbar (comp: trazo 2); la sidebar de escritorio conserva 1.9.
-  const strokeWidth = size === 24 ? 2 : 1.9;
+function getNavIcon(iconName?: string, size = 18, strokeWidth = 1.9) {
   switch (iconName) {
     case 'House':
       return <House size={size} strokeWidth={strokeWidth} />;
@@ -87,7 +85,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
   const esMovil = useEsMovil();
   // Mismo query key que Hoy y Alertas (caché compartida); sin token no consulta: ni en escritorio ni sin permiso a /alertas.
   const puedeAlertas = isRouteAllowedForRole(NAV_ITEMS, '/alertas', user?.rol ?? '');
-  const alertasHoy = useInfraccionesHoy(esMovil && puedeAlertas ? token : null);
+  const alertasHoy = useInfraccionesHoy(esMovil && puedeAlertas ? token : null, 30_000); // misma cadencia que En vivo: la query key es compartida y gana el observer más rápido
   const abiertas = alertasHoy.data?.filter((i) => i.estado === 'abierta').length ?? 0;
   const pathname = usePathname();
   const router = useRouter();
@@ -164,7 +162,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
     id: item.id,
     label: item.label,
     href: item.href,
-    icon: getNavIcon(item.iconName, 24),
+    icon: getNavIcon(item.iconName, 24, 2),
     active: isNavActive(pathname, item.href),
     ...(item.id === 'alertas' && { badge: abiertas, badgeLabel: textoAlertasAbiertas(abiertas) }),
     onClick: (event) => {

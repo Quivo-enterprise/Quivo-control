@@ -91,6 +91,21 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
 **Diseño B en el celular: NO está aplicado (5/11, noche).** El CTO abrió la PWA en r37 y vio el panel viejo responsive. D–H hicieron la estructura, pero no los tokens ni los componentes del comp B. Plan e inventario: `docs/plan-movil-diseno-b.md`. Decisiones: medidas del comp (fuera la base de 18 px), En vivo con dos chips y menú ⋯, y Más como página con todo. Son 10 PRs en orden y cada uno se compara con captura contra el comp.
 - PWA confirmada por el CTO en su celular: se instala y abre sin barra de URL.
 - 4701EHA era una sesión simulada por el CTO desde su emulador: el 401 de `refresh` baja de prioridad.
+- **Avance (nada desplegado; prod sigue en r37, #313 tampoco está en prod):**
+  - **PR 1, #314, mergeado (`84cb00b`).** Fuera la base de 18 px (vuelve a 16). Tokens de B solo a ≤720 px: texto secundario #475569, borde fuerte #94a3b8, radios 10/14/18, `line-height` 1.45 y variante oscura. Los botones de la fila ahora sí miden 48 px. Escritorio: 0 px de diferencia.
+  - **PR 2, #315 (en revisión).**
+    - Encabezado único: con pestañas, el `PageHeader` reemplaza la topbar.
+    - Barra de pestañas de 76 px con contador de alertas abiertas. El shell consulta cada 30 s, solo en el celular y solo para roles con `/alertas`.
+    - En Hoy: píldora En vivo/Lento/Sin conexión y fecha de La Paz.
+    - `--qv-color-success-soft` ahora está definido en `tokens.css`. Se usaba sin definir, también en `globals.css` (`.line-box-preview__live` de escritorio, que ahora sí tiene fondo verde).
+    - Gates: `/code-review` (10 hallazgos, 8 aplicados; el 4 y el 5 se descartaron con motivo en el PR), `/ponytail-review`, `web-design-guidelines` y `impeccable audit` 18/20.
+  - **PR 3 (placa y primitivas):** commit local en la rama `feat/web-movil-diseno-b-placa`, apilado sobre #315.
+    - Placa estilo cartel: Oxanium, borde de tinta, sin la banda "BOL".
+    - Tarjetas planas y botones md de 52 px.
+    - `StatusBadge` con forma: hoy no se usa en ninguna pantalla; los PR 4, 5 y 10 deben usarlo o se borra.
+  - **Hallazgo previo, sin arreglar:** en Vehículos el botón flotante "Nuevo vehículo" tapa las acciones de la última fila. Va con el PR 7.
+  - **Pendiente:** `scroll-padding-top` está fijo en 62 px; un encabezado que se parte en dos líneas puede tapar el elemento con foco. Revisar en Salidas (PR 6).
+  - **Codex: no verificado (sin cuota).**
 
 **Pendiente de la capacitación del 5/11 (prod):**
 - **Sesión de 4701EHA: cerrada por r37 (#290).** Tras el deploy quedó `activa: false`, sin infracciones de hoy ni sanción pendiente. **Sigue pendiente la opción 3:** la causa del 401 en `refresh` no se investigó. Chofer real Javier Bravo Soliz, id `36238a88-b5c1-4f32-ae4a-f134bd60edc4`. Antes del deploy seguía `activa` y su último fix era de las 14:15Z del 5/11. El CTO la cerró en la app, pero el cierre nunca llegó al server.

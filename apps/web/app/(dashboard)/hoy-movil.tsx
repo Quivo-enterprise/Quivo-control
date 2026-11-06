@@ -81,7 +81,7 @@ export function HoyMovil() {
   const n = normalizarBusqueda(consulta).length;
   const buscando = n >= BUSQUEDA_MIN;
   // Home: refresco lento (15 s); las jornadas solo hacen falta para cruzar el conductor al buscar.
-  const posiciones = usePosicionesEnVivo(token, 15_000);
+  const posiciones = usePosicionesEnVivo(token, INTERVALO_HOY_MS);
   const jornadas = useJornadasHoy(token, buscando);
   const alertas = useInfraccionesHoy(token);
   // Todas las pendientes (sin filtro de fecha). La API devuelve como máximo 200 filas y sin total.

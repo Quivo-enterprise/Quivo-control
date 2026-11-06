@@ -5068,7 +5068,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     gap: 10px;
     margin: 0 -16px 14px;
     min-height: calc(62px + env(safe-area-inset-top));
-    padding: calc(6px + env(safe-area-inset-top)) 16px 12px;
+    padding: calc(6px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 12px calc(16px + env(safe-area-inset-left));
     background: var(--qv-surface-card);
     border-bottom: 1px solid var(--qv-border-subtle);
   }
@@ -5576,9 +5576,9 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     background: var(--qv-color-primary-soft);
   }
 
-  /* Comp: anillo naranja de 3 px (el primario no se distingue sobre la píldora activa). */
+  /* Anillo primario de 3 px (el naranja da ~2:1 sobre blanco); el offset lo deja sobre la tarjeta, fuera de la píldora activa. */
   .qv-tabbar__tab:focus-visible {
-    outline: 3px solid var(--qv-color-accent);
+    outline: 3px solid var(--qv-color-primary);
     outline-offset: 2px;
     box-shadow: none;
     border-radius: var(--qv-radius-md);

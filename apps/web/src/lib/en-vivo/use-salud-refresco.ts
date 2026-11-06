@@ -27,8 +27,8 @@ export function saludRefresco(
   return { estado: segundos * 1000 > FACTOR_LENTO * intervaloMs ? 'lento' : 'ok', segundos };
 }
 
-/** Salud del refresco de `usePosicionesEnVivo`. Re-renderiza cada segundo: usarlo solo en una hoja (barra de mando). */
-/** `intervaloMs`: cadencia real del poll (Hoy refresca cada 15 s, no cada 2 s). */
+/** Salud del refresco de `usePosicionesEnVivo`. Re-renderiza cada segundo: usarlo solo en una hoja (barra de mando).
+ * `intervaloMs`: cadencia real del poll (Hoy refresca cada 15 s, no cada 2 s). */
 export function useSaludRefresco(q: Consulta, intervaloMs: number = INTERVALO_POLL_POSICIONES_MS): SaludRefresco {
   const ahora = useReloj(1000);
   const visibleDesde = useRef(Date.now());

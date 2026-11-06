@@ -61,7 +61,7 @@ export function MobileTabBar({ tabs, drawerId, moreOpen, onMore, moreRef }: Mobi
           {tab.badge ? (
             <>
               <span className="qv-tabbar__badge" aria-hidden="true">{tab.badge}</span>
-              {tab.badgeLabel && <span className="qv-visually-hidden">{tab.badgeLabel}</span>}
+              {tab.badgeLabel && <span className="qv-visually-hidden">, {tab.badgeLabel}</span>}
             </>
           ) : null}
         </a>
