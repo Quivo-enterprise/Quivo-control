@@ -129,11 +129,11 @@ Orden: D → bake-off → E (pestañas) → F (salidas) → G (alertas, con endp
   - **PR 7, #320, mergeado (`bba5db6`).** Página propia en el celular, reemplaza al drawer.
     - Tocar Más cambia de ruta: desde En vivo desmonta el mapa, y al volver se pierde el vehículo elegido. Es consecuencia de la decisión del CTO de hacerla página completa.
     - El drawer móvil quedó sin uso: su código se borra en un PR aparte.
-  - **PR 8 (En vivo con chips y menú ⋯):** este PR.
+  - **PR 8, #321, mergeado (`eaec723`).** En vivo con chips y menú ⋯.
     - El menú ⋯ conserva Flota, Días anteriores, Siguiente alerta, filtro por nivel, Seguir, Ampliar y Refrescar. El operador no tiene pestaña Alertas: ve el conteo en una insignia sobre ⋯.
     - El chip de salud pierde "hace" hasta 469 px y los segundos hasta 409 px, para que "Línea 16" no se corte. A 412 px difiere del comp, que no tenía el ⋯.
     - Pendiente: unificar `MenuFila` de Salidas con `MenuAcciones`.
-  - **PR 9 (marcadores píldora):** commit local apilado, esperando el rebase.
+  - **PR 9 (marcadores píldora):** este PR.
     - PR 9: color y prefijo por estado: reportando verde, detenido cian "■", en pausa ámbar "–", sin señal rojo "!", finalizado gris "✓", inactivo gris. La decisión es del chairman, porque el comp solo define 3 estados.
     - La key de Google Maps no funciona en localhost: los marcadores solo se verificaron en un harness aislado, no sobre el mapa real.
   - **Botón flotante de Vehículos:** con el padding actual no se reprodujo que tape la última fila. Lo cubre un test del PR 7.

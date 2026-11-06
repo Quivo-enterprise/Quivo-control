@@ -59,6 +59,15 @@
   --qv-estado-glifo-tinta: #ffffff;
   /* Molinos: ámbar oscuro (el #d97706 de warning no da 4,5:1 con texto blanco de 11 px). */
   --qv-molinos: #b45309;
+  /* Píldora de placa del marcador (móvil): va sobre el mapa, así que NO cambia en oscuro; todas
+     dan >= 4,5:1 con texto blanco de 13 px en negrita. */
+  --qv-gmap-pill-ok: #15803d;
+  --qv-gmap-pill-detenido: #0e7490;
+  --qv-gmap-pill-pausa: #b45309;
+  --qv-gmap-pill-perdido: #b91c1c;
+  --qv-gmap-pill-finalizado: #475569;
+  --qv-gmap-pill-inactivo: #64748b;
+  --qv-gmap-pill-sel: #3226b4;
 
   /* Texto */
   --qv-text-primary: #0f172a;
