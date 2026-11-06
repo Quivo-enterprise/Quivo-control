@@ -4844,7 +4844,14 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     color: var(--qv-text-secondary);
     font-size: 13px;
     font-weight: 700;
+    /* Única pieza que cede en 360 px: placa, foto y cerrar no se encogen. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .qv-live-panel__m-top > :not(.qv-live-panel__m-tag) {
+    flex-shrink: 0;
   }
   .qv-live-panel__m-foto {
     flex: none;
@@ -4903,11 +4910,11 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   }
   /* Con alertas abiertas: rojo (la forma la da el texto "N abiertas", el color refuerza). */
   .qv-live-panel__m-stat--al {
-    background: color-mix(in srgb, var(--qv-color-danger) 12%, var(--qv-surface-card));
+    background: var(--qv-color-danger-soft);
     border-color: var(--qv-color-danger);
   }
   .qv-live-panel__m-stat--al b {
-    color: var(--qv-estado-perdido-texto);
+    color: var(--qv-color-danger-texto);
   }
   /* Designación (comp .seg): sin recuadro de sección, control grande de 2 px violeta. */
   .qv-vuelta--movil {

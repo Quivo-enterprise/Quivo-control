@@ -1290,6 +1290,23 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(tarjetas.nth(0)).toContainText('Vuelta 2');
       await expect(tarjetas.nth(1)).toContainText('1 abierta');
       await expect(tarjetas.nth(1)).toHaveClass(/qv-live-panel__m-stat--al/);
+      // Colores de los tokens de peligro (no color-mix ni el tono de estado "perdido").
+      const colores = await tarjetas.nth(1).evaluate((el) => {
+        const resolver = (v: string, prop: 'backgroundColor' | 'color') => {
+          const t = document.createElement('i');
+          t.style[prop] = `var(${v})`;
+          document.body.appendChild(t);
+          const c = getComputedStyle(t)[prop];
+          t.remove();
+          return c;
+        };
+        return {
+          fondo: getComputedStyle(el).backgroundColor, fondoEsperado: resolver('--qv-color-danger-soft', 'backgroundColor'),
+          texto: getComputedStyle(el.querySelector('b')!).color, textoEsperado: resolver('--qv-color-danger-texto', 'color'),
+        };
+      });
+      expect(colores.fondo).toBe(colores.fondoEsperado);
+      expect(colores.texto).toBe(colores.textoEsperado);
       // Designación: opciones y cambio vía API (mock).
       const grupo = hoja.getByRole('radiogroup');
       await expect(grupo.getByRole('radio', { name: 'Directo' })).toBeChecked();
@@ -1333,6 +1350,62 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await expect(neutra).not.toHaveClass(/qv-live-panel__m-stat--al/);
     } finally {
       for (const u of ['**/v1/reportes/en-vivo/posiciones*', `**/v1/reportes/en-vivo/${sesionId}/contexto`, `**/v1/rutas/${rutaId}/variantes`, `**/v1/rutas/${rutaId}/puntos-control`, '**/v1/reportes/en-vivo/infracciones*', `**/v1/reportes/en-vivo/${sesionId}/infracciones*`, '**/v1/infracciones*', `**/v1/reportes/en-vivo/${sesionId}/vuelta-actual/designacion`]) await page.unroute(u);
+    }
+  });
+
+  test('En vivo: cabecera de la hoja sin desborde a 360 px y cerrar no queda tapado por los chips', async () => {
+    test.setTimeout(120_000);
+    const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
+    const sesionId = id(1), vehiculoId = id(2);
+    const pos = {
+      id: sesionId, deviceId: 'd1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'Bravo Soliz J.',
+      lineaId: id(4), lineaNombre: 'Línea 120 Expreso Tiquipaya Cercado Norte', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 5, speed: 8.6,
+      totalPuntos: 10, estadoFrescura: 'reportando', vehiculoId, infraccionesAbiertas: 0, fotoUrl: 'http://localhost:3130/foto-qa.png',
+    };
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    await page.route('**/foto-qa.png', (r) => r.fulfill({ body: png, contentType: 'image/png' }));
+    await page.route('**/v1/reportes/en-vivo/posiciones*', (r) => r.fulfill({ json: [pos] }));
+    try {
+      for (const [w, h] of [[360, 800], [360, 640], [412, 915]] as const) {
+        await page.setViewportSize({ width: w, height: h });
+        await page.goto(`/en-vivo?vehiculo=${vehiculoId}&sesion=${sesionId}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        const hoja = page.getByLabel('Detalle del vehículo 4701EHA');
+        await expect(hoja).toBeVisible({ timeout: 30_000 });
+        await expect(hoja.locator('.qv-live-panel__m-foto')).toBeVisible();
+        const r = await page.evaluate(() => {
+          const q = (sel: string) => document.querySelector(sel) as HTMLElement;
+          const hojaEl = q('[aria-label^="Detalle del vehículo"]');
+          const cerrar = q('.qv-live-panel__m-top .qv-live-panel__cerrar').getBoundingClientRect();
+          const placa = q('.qv-live-panel__m-top .qv-plate').getBoundingClientRect();
+          const placaEl = q('.qv-live-panel__m-top .qv-plate');
+          const centro = document.elementFromPoint(cerrar.x + cerrar.width / 2, cerrar.y + cerrar.height / 2);
+          const centroPlaca = document.elementFromPoint(placa.x + placa.width / 2, placa.y + placa.height / 2);
+          return {
+            hojaOverflow: hojaEl.scrollWidth - hojaEl.clientWidth, paginaOverflow: document.documentElement.scrollWidth - window.innerWidth,
+            cerrarW: cerrar.width, cerrarDerecha: cerrar.right, cerrarTapado: !centro?.closest('.qv-live-panel__cerrar'),
+            placaTapada: !centroPlaca?.closest('.qv-plate'), placaRecortada: placaEl.scrollWidth - placaEl.clientWidth,
+            hojaDerecha: hojaEl.getBoundingClientRect().right, ancho: window.innerWidth,
+          };
+        });
+        const vp = `${w}x${h}`;
+        expect(r.hojaOverflow, `desborde de la hoja ${vp}`).toBeLessThanOrEqual(0);
+        expect(r.paginaOverflow, `desborde de la página ${vp}`).toBeLessThanOrEqual(0);
+        expect(r.cerrarW, `cerrar ≥44 ${vp}`).toBeGreaterThanOrEqual(44);
+        expect(r.cerrarDerecha, `cerrar dentro de la pantalla ${vp}`).toBeLessThanOrEqual(r.ancho);
+        expect(r.cerrarTapado, `cerrar tapado por otro elemento ${vp}`).toBe(false);
+        expect(r.placaTapada, `placa tapada ${vp}`).toBe(false);
+        expect(r.placaRecortada, `placa recortada ${vp}`).toBeLessThanOrEqual(0);
+        // Expandida (estado por defecto) y plegada: cerrar sigue siendo accionable.
+        await hoja.getByRole('button', { name: 'Plegar detalle para ver el mapa' }).click();
+        const cerrar = hoja.getByRole('button', { name: 'Cerrar detalle del vehículo' });
+        await expect(cerrar).toBeVisible();
+        await cerrar.click({ timeout: 5_000 });
+        await expect(hoja).toHaveCount(0);
+      }
+    } finally {
+      await page.setViewportSize({ width: 412, height: 915 });
+      await page.unroute('**/foto-qa.png');
+      await page.unroute('**/v1/reportes/en-vivo/posiciones*');
     }
   });
 
