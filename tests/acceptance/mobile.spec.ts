@@ -750,6 +750,50 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(row).toHaveCSS('display', 'grid');
   });
 
+  test('CSS en dev: ninguna lista de selectores mezcla :has() con selectores sin :has()', async () => {
+    // shortcut: corre contra `next dev`, no ve el minificador (que funde reglas y quita `vh` antes de `dvh`); revisar el CSS de `next build` antes de desplegar, o apuntar este test a `next start`.
+    await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
+    // Un :has() desconocido (Chrome < 105) anula la lista entera; el minificador funde reglas idénticas contiguas.
+    const mezcladas = await page.evaluate(() => {
+      const out: string[] = [];
+      const partir = (sel: string) => {
+        const parts: string[] = [];
+        let depth = 0;
+        let ini = 0;
+        for (let i = 0; i < sel.length; i++) {
+          if (sel[i] === '(') depth++;
+          else if (sel[i] === ')') depth--;
+          else if (sel[i] === ',' && depth === 0) {
+            parts.push(sel.slice(ini, i));
+            ini = i + 1;
+          }
+        }
+        parts.push(sel.slice(ini));
+        return parts;
+      };
+      const recorrer = (rules: CSSRuleList) => {
+        for (const rule of Array.from(rules)) {
+          if (rule instanceof CSSStyleRule) {
+            const parts = partir(rule.selectorText);
+            const con = parts.filter((p) => p.includes(':has('));
+            if (con.length > 0 && con.length < parts.length) out.push(rule.selectorText);
+          } else if ('cssRules' in rule) {
+            recorrer((rule as CSSGroupingRule).cssRules);
+          }
+        }
+      };
+      for (const sheet of Array.from(document.styleSheets)) {
+        try {
+          recorrer(sheet.cssRules);
+        } catch {
+          // hoja de otro origen: no legible
+        }
+      }
+      return out;
+    });
+    expect(mezcladas).toEqual([]);
+  });
+
   test('inputs >= 16 px (iOS no hace zoom) y base 16 px', async () => {
     await page.goto('/vehiculos', { waitUntil: 'networkidle', timeout: 60_000 });
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe('16px');
