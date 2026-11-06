@@ -6,6 +6,16 @@
 > **Este documento registra la ejecución. La intención vive en los planes** — si los dos se
 > contradicen, el plan manda sobre qué hay que hacer y este handoff sobre qué se hizo.
 
+## 2026-11-06: cierre manual de todas las sesiones de choferes (pedido del CTO, ~13:02 hora Bolivia)
+
+El CTO pidió cerrar todas las sesiones activas de los pilotos. No hay endpoint de admin para esto y Cloud SQL solo tiene IP privada, así que se hizo con `gcloud run jobs execute quivo-migraciones --args=...` (override por ejecución, el job no cambia).
+
+- Cerradas 8 sesiones, todas del Sindicato Piloto: 3115SRI, 4401KRS, 4517FZG, 4745HGH, 5008CIN, 5159ESL, 5201ANR, 5360NII. Quedan 0 activas.
+- Misma transición que el barrido de zombis: `estado = cerrada`, `revokedAt = now()`, `cerradaPorSistema = true`, `fin` = última actividad real. 1 trufi salió de la fila (`retirado`).
+- Respaldo de las filas: logs de la ejecución `quivo-migraciones-4fdfh`. Censo previo: `quivo-migraciones-6mg6z`.
+- Los choferes pueden volver a entrar con su PIN: las rotaciones siguen vigentes.
+- No verificado en un celular real que la app haya vuelto al login.
+
 ## 2026-11-06: vecinos de ruta sin la fila de la terminal (#338, `f0e43cc`, r43)
 
 Reporte del CTO (6/11): 3115SRI veía que el trufi de "delante" cambiaba muchas veces. Plan: `docs/plan-vecinos-ruta.md`.
