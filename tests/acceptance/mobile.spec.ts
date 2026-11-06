@@ -75,7 +75,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     }
   });
 
-  test('Más: página, no drawer; lista de admin_quivo y activa en una ruta secundaria', async () => {
+  test('Más: página propia (sin menú lateral); lista de admin_quivo y activa en una ruta secundaria', async () => {
     await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
     const tabbar = page.getByRole('navigation', { name: 'Pestañas', exact: true });
     const mas = tabbar.getByRole('link', { name: 'Más', exact: true });
@@ -89,7 +89,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
     await expect(page.getByRole('heading', { name: 'Más', level: 1 })).toBeVisible();
     await expect(page.locator('.qv-mas-user__name')).toHaveText(ADMIN.email);
     await expect(page.locator('.qv-mas-user__meta')).toHaveText('Administrador QUIVO');
-    // El drawer no se abre desde ningún lado: la sidebar sigue fuera de pantalla.
+    // La sidebar está oculta (display:none) en celular: no hay menú lateral y la navegación principal no expone el enlace.
     await expect(page.getByRole('navigation', { name: 'Navegación principal' }).getByRole('link', { name: 'Vehículos' })).toBeHidden();
     await expect(page.locator('.qv-mas-list__link')).toHaveText(conTag(ETIQUETAS_MAS.admin_quivo));
     // /rutas es solo lectura en celular (ver test "Rutas: solo lectura en celular").

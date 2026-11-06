@@ -271,7 +271,7 @@ body::-webkit-scrollbar {
   background: currentColor;
 }
 
-/* Etiqueta >= 4,5:1 sobre su fondo: tokens de texto de estado, no los colores de relleno. */
+/* Etiqueta >= 4,5:1 sobre su propio fondo de insignia, en claro y en oscuro: tokens de texto de estado, no los colores de relleno. */
 .qv-status-badge--active {
   background: color-mix(in srgb, var(--qv-color-success) 15%, transparent);
   color: var(--qv-estado-reportando-texto);
@@ -300,6 +300,13 @@ body::-webkit-scrollbar {
 .qv-status-badge--pending {
   background: var(--qv-color-primary-subtle);
   color: var(--qv-color-primary);
+}
+
+/* En oscuro el primario (#6672f5) sobre primary-subtle (#191943) da 4,19:1: se usa el texto primario (15,2:1). */
+@media (prefers-color-scheme: dark) {
+  .qv-status-badge--pending {
+    color: var(--qv-text-primary);
+  }
 }
 
 /* =========================================================================
