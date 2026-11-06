@@ -29,6 +29,7 @@ body::-webkit-scrollbar {
 
 body {
   font-family: var(--qv-font-body);
+  color: var(--qv-text-primary);
 }
 
 /* Animación del punto pulsante "En vivo" */
@@ -417,7 +418,7 @@ body {
 .vehicle-type-card > svg:last-child {
   background: var(--qv-color-primary);
   border-radius: var(--qv-radius-full);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
   padding: 2px;
   position: absolute;
   right: var(--qv-space-xs);
@@ -2029,7 +2030,7 @@ body {
   background: var(--qv-color-primary);
   border-radius: var(--qv-radius-md);
   box-shadow: 0 8px 20px color-mix(in srgb, var(--qv-color-primary) 24%, transparent);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .vehicle-panel-header__eyebrow,
@@ -2215,7 +2216,7 @@ body {
   cursor: pointer;
   border-radius: var(--qv-radius-sm);
   background: var(--qv-color-primary);
-  color: white;
+  color: var(--qv-color-on-primary);
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -2449,6 +2450,7 @@ body {
   border: 0.11rem solid;
   border-radius: 0.12rem;
   background: #fff;
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   box-shadow:
     0 0.45rem 0.75rem rgb(15 23 42 / 15%),
     inset 0 0 0 0.15rem #f8fafc;
@@ -2620,6 +2622,7 @@ body {
 
 .line-box-preview__cartel {
   background: #fffef9;
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   border: 0.18rem solid;
   border-bottom-width: 0.28rem;
   border-radius: 0.45rem;
@@ -2782,7 +2785,7 @@ body {
   align-items: center;
   background: color-mix(in srgb, white 90%, transparent);
   border-radius: 0.35rem;
-  color: var(--qv-text-primary);
+  color: #0f172a; /* fondo claro fijo: no heredar el texto claro del tema oscuro */
   display: flex;
   gap: 0.35rem;
   margin: -1.15rem auto 0.35rem;
@@ -3142,7 +3145,7 @@ body {
 
 .vehicle-type-card-btn__badge {
   background: var(--qv-color-primary);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .vehicle-form-grid {
@@ -3300,7 +3303,7 @@ body {
   border: 2px solid var(--qv-surface-card);
   border-radius: var(--qv-radius-sm);
   box-shadow: var(--qv-shadow-sm);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
   display: flex;
   gap: var(--qv-space-xs);
   left: 50%;

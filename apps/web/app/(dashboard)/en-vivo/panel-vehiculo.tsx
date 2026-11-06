@@ -240,9 +240,8 @@ export function PanelVehiculo(props: PanelVehiculoProps) {
   // Cargando solo mientras de verdad carga: con la consulta deshabilitada (sin sesión/token) no hay dato ni carga.
   const textoAlertas = infracciones.data ? nAbiertas : infracciones.isLoading ? 'Cargando…' : 'Sin cargar';
   const vueltaHoy = posicion?.vuelta;
-  const textoHoy = vueltaHoy
-    ? `Vuelta ${vueltaHoy.numero} · ${vueltaHoy.varianteNombre ?? (vueltaHoy.varianteId ? 'Molinos' : 'Directo')}`
-    : '—';
+  // La designación (Directo/Molinos) ya está en el selector de abajo: aquí solo el número, que cabe a 412 px.
+  const textoHoy = vueltaHoy ? `Vuelta ${vueltaHoy.numero}` : '—';
   const pcs = contexto ? pcsEfectivos(contexto, posicion?.vuelta?.varianteId) : [];
   // shortcut: las infracciones de vueltas anteriores se numeran con el orden efectivo de la vuelta ACTUAL;
   // puede salir corrido en 1 si esa vuelta tuvo otra designación de Molinos. Numerar por la vuelta de cada

@@ -372,6 +372,7 @@ function crearElementoPunto(
   const pinType = punto.pinType ?? 'pin';
   const raiz = document.createElement('div');
   raiz.className = `qv-gmap-pt qv-gmap-pt--${tipo === 'stop' ? 'parada' : pinType} qv-gmap-pt--rol-${rol}`;
+  if (punto.sinEtiquetaMovil) raiz.classList.add('qv-gmap-pt--sin-etiqueta-movil');
   raiz.style.setProperty('--qv-gmap-pt-color', punto.color?.trim() || 'var(--qv-color-primary)');
   const arrastrable = esArrastrable(punto, tipo);
   if (arrastrable) {

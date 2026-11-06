@@ -16,6 +16,12 @@
   -ms-overflow-style: none !important;
 }
 
+/* El canvas (bajo la tabbar con viewport-fit: cover) sigue el tema; sin esto queda blanco en oscuro. */
+html {
+  color-scheme: light dark;
+  background: var(--qv-surface-sunken);
+}
+
 *::-webkit-scrollbar,
 html::-webkit-scrollbar,
 body::-webkit-scrollbar {
@@ -89,11 +95,18 @@ body::-webkit-scrollbar {
 
 .qv-button--primary {
   background: var(--qv-color-primary);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .qv-button--primary:not(:disabled):hover {
   background: color-mix(in srgb, var(--qv-color-primary) 88%, black);
+}
+
+/* En oscuro oscurecer el primario deja 3,9:1 con el texto on-primary: el hover aclara (5,8:1). */
+@media (prefers-color-scheme: dark) {
+  .qv-button--primary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--qv-color-primary) 88%, white);
+  }
 }
 
 .qv-button--secondary {
@@ -119,7 +132,7 @@ body::-webkit-scrollbar {
 
 .qv-button--danger {
   background: var(--qv-color-danger);
-  color: var(--qv-color-white);
+  color: var(--qv-color-on-primary);
 }
 
 .qv-button--danger:not(:disabled):hover {
@@ -302,7 +315,7 @@ body::-webkit-scrollbar {
   color: var(--qv-color-primary);
 }
 
-/* En oscuro el primario (#6672f5) sobre primary-subtle (#191943) da 4,19:1: se usa el texto primario (15,2:1). */
+/* En oscuro el primario (#6e79f6) sobre primary-subtle (#191943) da 4,54:1, justo: se usa el texto primario (15,2:1). */
 @media (prefers-color-scheme: dark) {
   .qv-status-badge--pending {
     color: var(--qv-text-primary);
@@ -955,7 +968,7 @@ body::-webkit-scrollbar {
 
 .qv-select-option--selected {
   background: var(--qv-color-primary);
-  color: #ffffff;
+  color: var(--qv-color-on-primary);
   font-weight: 600;
 }
 
@@ -2502,6 +2515,13 @@ body::-webkit-scrollbar {
 [data-lbl-marker='1'] .qv-gmap-pt:not(.qv-gmap-pt--parada) .qv-gmap-label--marker,
 [data-lbl-route='1'] .qv-gmap-label--route {
   display: block;
+}
+
+/* En el teléfono el mapa va limpio: los puntos de control (ida y vuelta en el mismo sitio) no llevan rótulo. */
+@media (max-width: 720px) {
+  [data-lbl-marker='1'] .qv-gmap-pt.qv-gmap-pt--sin-etiqueta-movil:not(.qv-gmap-pt--parada) .qv-gmap-label--marker {
+    display: none;
+  }
 }
 
 .qv-gmap--clickable {
@@ -5687,7 +5707,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     padding: 0 6px;
     border-radius: 11px;
     background: var(--qv-color-danger);
-    color: #fff;
+    color: var(--qv-color-on-primary);
     font-size: 12px;
     font-weight: 800;
     line-height: 22px;
@@ -5988,7 +6008,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     border: 2px solid var(--qv-surface-card);
     border-radius: 10px;
     background: var(--qv-color-danger);
-    color: #fff;
+    color: var(--qv-color-on-primary);
     font: 800 12px var(--qv-font-display);
   }
 
@@ -6693,7 +6713,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
     padding: 1px 8px;
     border-radius: 8px;
     background: var(--qv-color-danger);
-    color: #fff;
+    color: var(--qv-color-on-primary);
     font-size: 13px;
     font-weight: 700;
   }
@@ -6722,11 +6742,6 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   @media (prefers-reduced-motion: reduce) {
     .qv-hoy__kpi-cargando {
       animation: none;
-    }
-  }
-  @media (prefers-color-scheme: dark) {
-    .qv-hoy__chip {
-      color: #2a0a0a;
     }
   }
   .qv-hoy__buscar {
@@ -7288,7 +7303,7 @@ gmp-advanced-marker.qv-gmap--arrastrable:focus-visible .qv-gmap-pt__dot {
   height: 54px;
   border-radius: 16px;
   background: var(--qv-color-primary);
-  color: #fff;
+  color: var(--qv-color-on-primary);
   font: 800 22px var(--qv-font-display);
 }
 

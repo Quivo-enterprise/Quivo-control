@@ -314,6 +314,11 @@ describe('construirPuntosControl', () => {
     ]);
   });
 
+  it('solo los PC numerados pierden el rótulo en el teléfono', () => {
+    const r = construirPuntosControl(contexto, undefined, null);
+    expect(r.map((p) => p.sinEtiquetaMovil)).toEqual([true, true, undefined]);
+  });
+
   it('lo numera dentro del orden efectivo cuando la vuelta lo designa', () => {
     expect(construirPuntosControl(contexto, undefined, 'v1').map((p) => p.label)).toEqual([
       'Punto de control 1',
