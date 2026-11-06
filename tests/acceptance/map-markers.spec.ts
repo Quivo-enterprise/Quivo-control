@@ -11,7 +11,9 @@ const css = ['tokens.css', 'styles.css'].map((f) => readFileSync(path.join(DS, f
 const OXANIUM = process.env.OXANIUM_TTF ?? '';
 const fuente = OXANIUM && existsSync(OXANIUM)
   ? `@font-face{font-family:Oxanium;font-weight:800;src:url(data:font/ttf;base64,${readFileSync(OXANIUM).toString('base64')})}:root{--qv-font-display:Oxanium}`
-  : '';
+  : process.env.MARKERS_FONT
+    ? `:root{--qv-font-display:${process.env.MARKERS_FONT}}` // fuerza una fuente de reserva (CI no tiene la del sistema local)
+    : '';
 
 type Caso = { placa?: string; estado: EstadoGlifo; sel?: boolean; alerta?: 'leve' | 'grave' | 'gravisima'; n?: number; molinos?: string; linea?: string };
 const CASOS: Caso[] = [
@@ -40,8 +42,9 @@ async function montar(page: Page, estilos: string, casos: Caso[], ancho: number)
       casos.forEach((c: Caso, i: number) => {
         const host = document.createElement('div');
         host.className = 'm';
-        host.style.left = `${70 + (i % 3) * 120}px`;
-        host.style.top = `${60 + Math.floor(i / 3) * 90}px`;
+        // 2 columnas a 180 px: con fuentes anchas la píldora seleccionada (~130 px) no pisa la zona táctil del vecino.
+        host.style.left = `${110 + (i % 2) * 180}px`;
+        host.style.top = `${60 + Math.floor(i / 2) * 90}px`;
         const raiz = document.createElement('div');
         raiz.className = `qv-gmap-veh qv-gmap-veh--est-${c.estado} qv-gmap--clickable`;
         raiz.id = `v${i}`;
