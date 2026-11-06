@@ -1,4 +1,5 @@
 import { devices, expect, test, type Page } from '@playwright/test';
+import { PosicionEnVivoSchema } from '@quivo/shared';
 import { NAV_ITEMS } from '../../apps/web/src/lib/nav-items';
 
 const ADMIN = { email: 'admin@quivo.local', password: 'Quivo123!' };
@@ -668,6 +669,16 @@ test.describe('Panel móvil (Pixel 7)', () => {
     test.setTimeout(90_000);
     const id = (n: number) => `00000000-0000-4000-8000-00000000${String(n).padStart(4, '0')}`;
     const pos = (n: number, estadoFrescura: string) => ({ id: id(n), estadoFrescura, vehiculoPlaca: `P${n}` });
+    // Posición completa (forma de `PosicionEnVivoSchema`) del vehículo buscado: alimenta la línea de estado de la tarjeta.
+    const ahora = new Date().toISOString();
+    const posBuscada = PosicionEnVivoSchema.parse({
+      id: id(300), deviceId: 'dev-1', activa: true, vehiculoPlaca: '4701EHA', conductorNombre: 'José Bravo',
+      lineaId: id(4), lineaNombre: 'Línea 16', rutaSentido: 'ida', lat: -17.38, lng: -66.3, accuracy: 8, speed: 6.5, totalPuntos: 40,
+      vehiculoId: id(7), conductorId: id(9),
+      vuelta: { numero: 2, varianteId: null, varianteNombre: null, designadaEn: null, acuseEn: null, enEspera: false, esperaDesdeTs: null, molinosProxima: false },
+      ultimoFixTs: ahora, ultimoIngresoTs: ahora, servidorTs: ahora, antiguedadFixMs: 4000, antiguedadIngestaMs: 4000,
+      inactivaDesdeMs: 4000, estadoFrescura: 'reportando', recorridoFinTs: null,
+    });
     const infra = (n: number, gravedad: string, estado: string) => ({
       sindicatoId: id(1), vehiculoId: id(2), conductorId: id(3), lineaId: id(4), rutaId: id(5), reglaId: null, finTs: null,
       lat: -17.38, lng: -66.3, sancionId: null, atendidaPor: null, atendidaEn: null, nota: null, createdAt: new Date().toISOString(),
@@ -675,7 +686,7 @@ test.describe('Panel móvil (Pixel 7)', () => {
       conductorNombre: 'X', lineaNombre: 'Línea 16', inicioTs: new Date().toISOString(), detalle: { distanciaMaxM: 240, duracionS: 90, puntos: 5 },
     });
     const rutas: [string, unknown][] = [
-      ['**/v1/reportes/en-vivo/posiciones*', [pos(1, 'reportando'), pos(2, 'detenido'), pos(3, 'finalizado'), pos(4, 'inactivo'), pos(5, 'inactivo')]],
+      ['**/v1/reportes/en-vivo/posiciones*', [pos(1, 'reportando'), pos(2, 'detenido'), pos(3, 'finalizado'), pos(4, 'inactivo'), pos(5, 'inactivo'), posBuscada]],
       ['**/v1/reportes/en-vivo/infracciones*', [infra(1, 'grave', 'abierta'), infra(2, 'leve', 'abierta'), infra(3, 'leve', 'abierta'), infra(4, 'grave', 'atendida')]],
       ['**/v1/sanciones*', [{ id: id(1) }, { id: id(2) }, { id: id(3) }, { id: id(4) }]],
       ['**/v1/reportes/jornadas*', { fecha: '2026-11-05', vehiculos: [{ vehiculoId: id(7), placa: '4701EHA', conductorId: id(9), conductorNombre: 'José Bravo', lineaNombre: 'Línea 16', estado: 'en_recorrido' }] }],
@@ -686,21 +697,36 @@ test.describe('Panel móvil (Pixel 7)', () => {
     try {
       await page.goto('/', { waitUntil: 'networkidle', timeout: 60_000 });
       const kpi = (nombre: string) => page.locator('.qv-hoy__kpi', { hasText: nombre });
-      await expect(kpi('En servicio')).toContainText('2');
-      await expect(kpi('En servicio')).toContainText('de 5 en flota');
+      // 6 posiciones (la buscada reporta): en servicio = reportando + detenido + la buscada.
+      await expect(kpi('En servicio')).toContainText('3');
+      await expect(kpi('En servicio')).not.toContainText('en flota');
       await expect(kpi('Inactivos')).toContainText('2');
       await expect(kpi('Alertas abiertas')).toContainText('3');
       await expect(kpi('Alertas abiertas')).toContainText('1 grave');
       await expect(kpi('Alertas abiertas')).toHaveAttribute('href', '/alertas');
-      await expect(kpi('Sanciones pendientes')).toContainText('4');
-      await expect(kpi('Sanciones pendientes')).toHaveAttribute('href', '/reglas');
+      await expect(kpi('Sanciones pend.')).toContainText('4');
+      await expect(kpi('Sanciones pend.')).toHaveAttribute('href', '/reglas');
+      await expect(page.getByRole('link', { name: 'Sanciones pendientes' })).toHaveAttribute('href', '/reglas');
+      // Comp B: el número va antes que la etiqueta; el resumen, antes que el buscador.
+      for (const nombre of ['En servicio', 'Inactivos', 'Alertas abiertas', 'Sanciones pend.']) {
+        const t = kpi(nombre);
+        const caja = async (sel: string) => (await t.locator(sel).boundingBox())!;
+        expect((await caja('.qv-hoy__kpi-valor')).y).toBeLessThan((await caja('.qv-hoy__kpi-etiqueta')).y);
+      }
+      expect((await page.locator('.qv-hoy__kpis').boundingBox())!.y).toBeLessThan((await page.locator('.qv-hoy__buscar').boundingBox())!.y);
+      await expect(kpi('Alertas abiertas')).toHaveClass(/qv-hoy__kpi--alerta/);
       await expect(page.locator('.qv-live-pill')).toContainText('En vivo');
       await expect(page.getByRole('navigation', { name: 'Pestañas', exact: true }).locator('.qv-tabbar__badge')).toHaveText('3');
 
       await page.getByLabel('Buscar placa o conductor').fill('4701 eh');
       const resultado = page.locator('.qv-hoy__resultado');
       await expect(resultado).toHaveCount(1);
-      await expect(resultado).toContainText('Línea 16 · José Bravo');
+      await expect(page.getByRole('status').filter({ hasText: '1 resultado' })).toContainText('“4701 eh”');
+      await expect(resultado.locator('.qv-plate')).toContainText('4701EHA');
+      await expect(resultado.locator('.qv-hoy__tag')).toHaveText('Línea 16');
+      await expect(resultado.locator('.qv-hoy__resultado-nombre')).toHaveText('José Bravo');
+      await expect(resultado.locator('.qv-hoy__resultado-estado')).toHaveText(/Reportando\s*· 23 km\/h\s*· vuelta 2/);
+      await expect(resultado.locator('.qv-hoy__resultado-meta')).toContainText(/hace \d+ s/);
       await expect(resultado.getByRole('link', { name: 'Llamar' })).toHaveAttribute('href', 'tel:+59171234567');
       await expect(resultado.getByRole('link', { name: 'WhatsApp' })).toHaveAttribute('href', 'https://wa.me/59171234567');
       for (const btn of await resultado.locator('a').all()) expect((await btn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -710,6 +736,9 @@ test.describe('Panel móvil (Pixel 7)', () => {
       await page.getByLabel('Buscar placa o conductor').fill('1616');
       await expect(resultado).toHaveCount(1);
       await expect(resultado.getByRole('link')).toHaveCount(0);
+      // Sin posición hoy: ni línea de estado ni meta, solo el aviso neutro.
+      await expect(resultado.locator('.qv-hoy__resultado-estado')).toHaveCount(0);
+      await expect(resultado).toContainText('Sin turno hoy');
     } finally {
       for (const [patron] of rutas) await page.unroute(patron);
     }
@@ -744,6 +773,11 @@ test.describe('Panel móvil (Pixel 7)', () => {
       liberar();
       await expect(enCurso).toHaveCount(0);
       await expect(banner).toHaveCount(0);
+      // Sin alertas abiertas: el tile no es rojo y no hay chip de graves.
+      const alertas = page.locator('.qv-hoy__kpi', { hasText: 'Alertas abiertas' });
+      await expect(alertas).toContainText('0');
+      await expect(alertas).not.toHaveClass(/qv-hoy__kpi--alerta/);
+      await expect(page.locator('.qv-hoy__chip')).toHaveCount(0);
     } finally {
       liberar();
       for (const [patron] of rutas) await page.unroute(patron);
