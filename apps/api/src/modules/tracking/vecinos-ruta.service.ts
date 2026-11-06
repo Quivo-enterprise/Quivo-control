@@ -4,6 +4,7 @@ import {
   PRECISION_MAX_M,
   prepararCircuito,
   progresoEnCircuito,
+  UMBRAL_VECINO_FRESCO_MS,
   UMBRAL_VECINO_RUTA_FRESCO_MS,
   VecinosRutaSchema,
   type CircuitoPreparado,
@@ -175,6 +176,8 @@ export class VecinosRutaService {
     const jornadaDesde = new Date(
       inicioDeJornadaBolivia(jornada).getTime() - GRACIA_ACTIVIDAD_MEDIANOCHE_MS,
     );
+    // Mi propio fix guardado conserva la ventana de 10 min; solo los candidatos usan la de 5.
+    const miFixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_FRESCO_MS);
     const fixDesde = new Date(ahora.getTime() - UMBRAL_VECINO_RUTA_FRESCO_MS);
 
     return withTenantContext({ rol: 'conductor', sindicatoId: sesion.sindicatoId }, async (tx) => {
@@ -196,7 +199,7 @@ export class VecinosRutaService {
             ORDER BY gr.ultimo_fix_ts DESC
             LIMIT 1
           ) res
-          CROSS JOIN LATERAL (${fixElegido(fixDesde, Prisma.sql`${lat}::float8 IS NULL`)}) p
+          CROSS JOIN LATERAL (${fixElegido(miFixDesde, Prisma.sql`${lat}::float8 IS NULL`)}) p
         ) pos ON true
         ${faseLateral(jornadaDesde)}
         WHERE so.id = ${sesion.sesionId} AND so."sindicatoId" = ${sesion.sindicatoId}

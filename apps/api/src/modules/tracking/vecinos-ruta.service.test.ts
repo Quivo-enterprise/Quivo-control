@@ -196,6 +196,10 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
             llegadaTs: new Date(AHORA.getTime() - 20 * MINUTO),
             ordenTs: new Date(AHORA.getTime() - 20 * MINUTO),
             estado: spec.fila,
+            // fila_salida_salio_check: 'salio' exige salidaTs y salidaOrigen; el resto, ambos nulos.
+            ...(spec.fila === 'salio'
+              ? { salidaTs: new Date(AHORA.getTime() - 5 * MINUTO), salidaOrigen: 'geocerca' as const }
+              : {}),
           },
         });
       }
@@ -464,6 +468,15 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
 
     expect(r.delante).toBeNull();
     expect(r.detras?.placa).toBe('VRFRESCO');
+  });
+
+  it('sin lat/lng, mi fix guardado de 7 min (más viejo que el umbral de vecinos) aún me ubica', async () => {
+    await crearSesion({ placa: 'VR7MV', pos: { lng: LNG_ADELANTE, lat: LAT } });
+    const yo = await crearSesion({ placa: 'VR7MY', pos: { lng: LNG_YO, lat: LAT }, edadFixMs: 7 * MINUTO });
+
+    const r = await service.obtener(yo, {}, AHORA);
+
+    expect(r.delante?.placa).toBe('VR7MV');
   });
 
   it('excluye a un par con sesión cerrada/revocada (logout) aunque su recorrido siga en_curso', async () => {
@@ -798,9 +811,11 @@ describe('VecinosRutaService (contra Postgres + PostGIS)', () => {
       const yo = await crearSesion({ placa: 'VRDSY', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'ida' });
       await crearSesion({ placa: 'VRDSO', rutaId: rutaCerradaId, pos: MIA_IDA, fase: 'regreso' });
       const r = await service.obtener(yo, {}, AHORA);
+      // Lado no determinable a mano: la separación (~1843 m) es casi exactamente L/2 del circuito.
       const d = r.delante ?? r.detras;
+      expect(d).not.toBeNull();
       expect(d?.placa).toBe('VRDSO');
-      expect(d!.distanciaM).toBeGreaterThan(1_000);
+      expect(d?.distanciaM).toBeGreaterThan(1_000);
     });
   });
 
